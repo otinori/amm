@@ -1,0 +1,43 @@
+.vscode/
+.idea/
+*.iml
+
+# Claude Code 個人設定
+.claude/settings.local.json
+
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+*.vs/
+WebViewShared/
+.dotnet-home*/
+**/publish/
+# 例外: src/publish/ は発行プロファイル (*.pubxml) の置き場 (出力先ではない) のため追跡する
+!src/publish/
+!src/publish/**
+**/TestResults/
+
+# 成果物出力 (構成案: artifacts/ に EXE/DLL/publish/packages を集約)
+artifacts/
+
+# WebView2 Fixed Version Runtime
+runtimes/webview2/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+*.lnk
+
+# UDR local cache / audit
+.udr/index.json
+.udr/audit.log
+.udr/audit.log.*
+
+# UDR dashboard (generated)
+udr_dashboard.html
+.udr/_gen_dashboard.py
+.DS_Store

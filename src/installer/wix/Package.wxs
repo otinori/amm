@@ -1,0 +1,159 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!--
+    amm Windows Installer (MSI)
+      - per-machine (Program Files 64bit)
+      - WixUI_InstallDir の標準フロー:
+          WelcomeDlg → LicenseAgreementDlg → InstallDirDlg → VerifyReadyDlg → インストール
+        ライセンスに同意しないと Next が非活性になる標準動作。
+      - MajorUpgrade で旧バージョン自動アンインストール
+      - スタートメニューに amm ショートカット
+      - publish 出力 (scripts\publish.cmd の結果) を丸ごと harvest
+  -->
+
+  <Package
+      Name="amm"
+      Manufacturer="amm contributors"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="8E3C7A9B-1F4D-4A2B-9C5E-6F8D7A3B2C1D"
+      Scope="perMachine"
+      Compressed="yes"
+      Codepage="65001"
+      InstallerVersion="500">
+
+    <SummaryInformation Description="amm - multi-agent terminal operator" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AmmIcon.exe" SourceFile="$(var.IconSourceFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AmmIcon.exe" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/" />
+
+    <Feature Id="Main" Title="amm" Level="1" AllowAdvertise="no" AllowAbsent="no">
+      <ComponentGroupRef Id="AmmPublishedFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="PathEnvironment" />
+      <ComponentRef Id="AmmFileAssociation" />
+    </Feature>
+
+    <!-- WixUI_InstallDir: Welcome → LicenseAgreement → InstallDir → VerifyReady
+         InstallDirectory に INSTALLFOLDER を指定してインストール先選択ページを有効化。 -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+
+    <!-- Apache License 2.0 全文 (License.rtf) を LicenseAgreementDlg に表示する。 -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="amm" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppShortcutFolder" Name="amm" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <!-- publish 出力ツリーを丸ごと取り込む (amm.exe / amm-mcp.exe / Resources/ / profiles.amm 等) -->
+    <ComponentGroup Id="AmmPublishedFiles" Directory="INSTALLFOLDER">
+      <!-- *.pdb / WebView2 XML doc は build-installer.cmd で publish/ から事前削除する -->
+      <Files Include="$(var.PublishDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <!-- system PATH (HKLM) に C:\Program Files\amm\ を append。
+         Part=last + Separator=";" で末尾追加 / uninstall で当該パスのみ自動除去。
+         新規 cmd.exe / Explorer から `amm` をパス不要で起動可能。 -->
+    <Component Id="PathEnvironment" Directory="INSTALLFOLDER" Guid="7B2C9F5A-4D1E-4A8B-9C6D-3F7A2E1B5D8C">
+      <Environment Id="UpdateSystemPath"
+                   Name="PATH"
+                   Action="set"
+                   Part="last"
+                   System="yes"
+                   Permanent="no"
+                   Separator=";"
+                   Value="[INSTALLFOLDER]" />
+      <RegistryValue Root="HKLM"
+                     Key="Software\amm"
+                     Name="PathAdded"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <!-- .amm 拡張子を amm.exe に関連付け (per-machine / HKLM)。
+         Explorer から .amm ファイルをダブルクリックすると amm.exe "<path>"
+         で起動し、AppLaunchOptions.Parse が当該ファイルを読み込む。
+         `<Files Include>` で harvest した amm.exe は File Id が不定なので
+         ProgId / Verb 要素を避け、RegistryValue を直書きする。アンインストール
+         時はキーパスごとに HKLM\Software\Classes 配下のエントリが自動削除される。
+         ProgId 名 "amm.ProfilesFile.1" は v1 という意味の慣習的サフィックス。 -->
+    <Component Id="AmmFileAssociation" Directory="INSTALLFOLDER" Guid="5A8D3E2C-9B1F-4C7A-8D6E-2F1A0B3C7E9D">
+      <!-- 拡張子 -> ProgId のマッピング。OpenWithProgids にも登録して
+           Explorer 「プログラムから開く」候補にも出るようにする。
+           ForceDeleteOnUninstall=yes でアンインストール時に空キーも除去。 -->
+      <RegistryKey Root="HKLM" Key="Software\Classes\.amm" ForceDeleteOnUninstall="yes">
+        <RegistryValue Type="string" Value="amm.ProfilesFile.1" />
+        <RegistryValue Name="Content Type" Type="string" Value="application/x-amm-profiles" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="Software\Classes\.amm\OpenWithProgids">
+        <RegistryValue Name="amm.ProfilesFile.1" Type="string" Value="" />
+      </RegistryKey>
+      <!-- ProgId 本体: 表示名 / 既定アイコン / open verb (amm.exe "%1") -->
+      <RegistryKey Root="HKLM" Key="Software\Classes\amm.ProfilesFile.1" ForceDeleteOnUninstall="yes">
+        <RegistryValue Type="string" Value="amm profiles file" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="Software\Classes\amm.ProfilesFile.1\DefaultIcon">
+        <RegistryValue Type="string" Value="[INSTALLFOLDER]amm.exe,0" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="Software\Classes\amm.ProfilesFile.1\shell\open\command">
+        <RegistryValue Type="string" Value="&quot;[INSTALLFOLDER]amm.exe&quot; &quot;%1&quot;" />
+      </RegistryKey>
+      <!-- キーパス: Component の有無を表現する単一値 -->
+      <RegistryValue Root="HKLM"
+                     Key="Software\amm"
+                     Name="AssocAmmExt"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="StartMenuShortcut" Directory="AppShortcutFolder" Guid="C4F0A2D1-7E5B-4A8C-9D6F-3B1E2A0C8D4F">
+      <Shortcut Id="AmmStartMenuShortcut"
+                Name="amm"
+                Description="Multi-agent terminal operator"
+                Target="[INSTALLFOLDER]amm.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AmmIcon.exe" />
+      <!-- 使い方ガイド (usage.md) をスタートメニューから開けるドキュメントショート
+           カット。Target は exe ではなく文書ファイルなので、Windows の .md 関連付け
+           (既定のエディタ / ビューア) で開かれる。usage.md は AmmPublishedFiles で
+           INSTALLFOLDER 直下に配置済み。 -->
+      <Shortcut Id="UsageGuideShortcut"
+                Name="amm 使い方ガイド"
+                Description="amm / amm-mcp の使い方ガイド (usage.md)"
+                Target="[INSTALLFOLDER]usage.md"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AmmIcon.exe" />
+      <RemoveFolder Id="RemoveAppShortcutFolder" On="uninstall" />
+      <!-- perMachine スコープ (ALLUSERS=1) では ProgramMenuFolder は
+           %ProgramData%\...\Start Menu\Programs に解決されるため
+           全ユーザーに表示される。ICE38/43 は HKCU キーパスで適合。 -->
+      <RegistryValue Root="HKCU"
+                     Key="Software\amm"
+                     Name="StartMenuInstalled"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+</Wix>

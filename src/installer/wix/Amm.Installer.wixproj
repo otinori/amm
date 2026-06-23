@@ -1,0 +1,30 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <!-- ファイル名: amm-setup-{ProductVersion}.msi -->
+    <!-- 64bit MSI (ProgramFiles64Folder と整合) -->
+    <Platform>x64</Platform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <!-- ProductVersion は -p:ProductVersion=x.y.z.w で上書き可。
+         省略時は Directory.Build.props の Version を使用。 -->
+    <ProductVersion Condition="'$(ProductVersion)' == ''">$(Version)</ProductVersion>
+    <OutputName>amm-setup-$(ProductVersion)</OutputName>
+    <!-- 既定の PublishDir は tools\publish.cmd の出力先 (リポジトリ直下 artifacts\publish) -->
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\artifacts\publish</PublishDir>
+    <!-- amm.ico は ApplicationIcon で exe 埋め込みのため publish に出力されない。ソースを直接参照 -->
+    <IconSourceFile Condition="'$(IconSourceFile)' == ''">$(MSBuildThisFileDirectory)..\..\apps\Amm\Resources\amm.ico</IconSourceFile>
+    <DefineConstants>PublishDir=$(PublishDir);IconSourceFile=$(IconSourceFile);ProductVersion=$(ProductVersion)</DefineConstants>
+    <!-- 最終配布物 (amm-setup.msi) はリポジトリ直下 artifacts\packages\ へ出力する
+         (構成案の「最終配布物 = artifacts/packages」に整合)。src 配下に成果物を残さない。
+         SDK 既定の bin\x64\Release を上書き。中間生成物 (obj) は gitignore 対象なので据え置き。 -->
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\..\artifacts\packages\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WixUI_InstallDir (インストール先選択ダイアログ) を使うための UI 拡張 -->
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>

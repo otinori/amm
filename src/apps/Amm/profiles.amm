@@ -1,0 +1,99 @@
+{
+  "profiles": [
+    {
+      "name": "CMD",
+      "commandType": "Cmd",
+      "executable": "cmd.exe",
+      "args": [],
+      "newlineMode": "CRLF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": true,
+      "waitPatterns": ["[>]\\s*$"],
+      "workingDirectory": "",
+      "promptNewNameOnCommandAdd": false
+    },
+    {
+      "name": "PowerShell",
+      "commandType": "PowerShell",
+      "executable": "powershell.exe",
+      "args": ["-NoLogo"],
+      "newlineMode": "CRLF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": true,
+      "waitPatterns": ["PS\\s+\\S+>\\s*$"],
+      "workingDirectory": "",
+      "promptNewNameOnCommandAdd": false
+    },
+    {
+      "name": "Claude Code",
+      "commandType": "ClaudeCode",
+      "executable": "claude.exe",
+      "args": [],
+      "newlineMode": "LF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": false,
+      "nickname": "claude",
+      "waitPatterns": ["^>"],
+      "workingDirectory": "",
+      "useBracketedPaste": true,
+      "selectWorkingDirOnStart": true,
+      "promptNewNameOnCommandAdd": true,
+      "quickPrompts": [
+        { "label": "continue", "prompt": "continue" }
+      ]
+    },
+    {
+      "name": "Copilot",
+      "commandType": "CopilotCli",
+      "executable": "cmd.exe",
+      "args": ["/c", "%APPDATA%\\npm\\copilot.cmd"],
+      "newlineMode": "LF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": false,
+      "nickname": "copilot",
+      "waitPatterns": ["^>", "^[❯›]"],
+      "workingDirectory": "",
+      "useBracketedPaste": true,
+      "selectWorkingDirOnStart": true,
+      "promptNewNameOnCommandAdd": true,
+      "quickPrompts": [
+        { "label": "continue", "prompt": "continue" }
+      ]
+    },
+    {
+      "name": "Codex",
+      "commandType": "Codex",
+      "executable": "cmd.exe",
+      "args": ["/c", "%APPDATA%\\npm\\codex.cmd"],
+      "newlineMode": "LF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": false,
+      "nickname": "codex",
+      "waitPatterns": ["^>", "^[❯›]"],
+      "workingDirectory": "",
+      "useBracketedPaste": true,
+      "selectWorkingDirOnStart": true,
+      "promptNewNameOnCommandAdd": true,
+      "quickPrompts": [
+        { "label": "continue", "prompt": "continue" }
+      ]
+    },
+    {
+      "name": "Gemini",
+      "executable": "cmd.exe",
+      "args": ["/c", "%APPDATA%\\npm\\gemini.cmd"],
+      "newlineMode": "LF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": false,
+      "nickname": "gemini",
+      "waitPatterns": ["^>", "^[❯›]"],
+      "workingDirectory": "",
+      "useBracketedPaste": true,
+      "selectWorkingDirOnStart": true,
+      "promptNewNameOnCommandAdd": true,
+      "quickPrompts": [
+        { "label": "continue", "prompt": "continue" }
+      ]
+    }
+  ]
+}

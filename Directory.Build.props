@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <!-- プロダクト全体のバージョン。ここだけを編集する。 -->
+    <Version>1.0.0.0</Version>
+    <Company>amm</Company>
+    <Product>amm</Product>
+    <Copyright>Copyright (c) The amm authors. Licensed under Apache-2.0.</Copyright>
+  </PropertyGroup>
+</Project>

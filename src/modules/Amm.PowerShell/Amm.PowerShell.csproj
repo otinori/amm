@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Amm.PowerShell</AssemblyName>
+    <RootNamespace>Amm.PowerShell</RootNamespace>
+    <!-- Version は Directory.Build.props で一元管理 -->
+    <Description>PowerShell binary module for controlling amm (multi-agent operator console).</Description>
+    <!-- Windows 専用 (Named Pipe / amm.exe が Windows 前提) -->
+    <Platforms>AnyCPU</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PowerShell 7.4+ バイナリモジュール用 SDK。
+         System.Management.Automation のみ参照 (軽量)。
+         実行環境の PowerShell 7.4 以上に付属の SMA.dll と置き換わるため
+         ExcludeAssets="runtime" で出力から除外する。 -->
+    <PackageReference Include="System.Management.Automation" Version="7.4.6">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Amm.PowerShell.psd1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

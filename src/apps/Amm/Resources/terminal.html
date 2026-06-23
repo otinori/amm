@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #1e1e1e; }
+    #terminal { width: 100%; height: 100%; }
+    #search-bar {
+      position: absolute; top: 4px; right: 4px; z-index: 1000;
+      display: none; background: #2d2d2d; padding: 4px 6px; border-radius: 3px;
+      font-family: "Cascadia Code", "Consolas", monospace; font-size: 12px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+    #search-bar input {
+      background: #1e1e1e; color: #d4d4d4; border: 1px solid #555;
+      padding: 2px 6px; width: 220px; outline: none;
+    }
+    #search-bar button {
+      background: #3c3c3c; color: #d4d4d4; border: 1px solid #555;
+      padding: 2px 8px; margin-left: 2px; cursor: pointer;
+    }
+    #search-bar button:hover { background: #4a4a4a; }
+  </style>
+  <link rel="stylesheet" href="./js/xterm.css" />
+  <script src="./js/xterm.js"></script>
+  <script src="./js/xterm-addon-fit.js"></script>
+  <script src="./js/xterm-addon-search.js"></script>
+</head>
+<body>
+  <div id="terminal"></div>
+  <div id="search-bar">
+    <input id="search-input" type="text" placeholder="検索..." />
+    <button id="search-prev" title="前 (Shift+Enter / Shift+F3)">↑</button>
+    <button id="search-next" title="次 (Enter / F3)">↓</button>
+    <button id="search-close" title="閉じる (Esc)">×</button>
+  </div>
+  <script>
+    const term = new Terminal({
+      convertEol: true,
+      fontFamily: '"Cascadia Code", "Consolas", monospace',
+      fontSize: 13,
+      cursorStyle: 'block',
+      cursorBlink: true,
+      theme: { background: '#1e1e1e', foreground: '#d4d4d4' }
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    const searchAddon = new SearchAddon.SearchAddon();
+    term.loadAddon(searchAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+    term.focus();  // ロード完了直後に xterm.js をフォーカス状態にしておく
+
+    // OSC 9 (端末通知): Codex の tui.notifications (notification_method = "osc9")
+    // が approval-requested / agent-turn-complete をこのエスケープで通知してくる。
+    // テキストを C# へ中継し、TerminalChildForm が attention / idle に解釈する
+    // (hook を持たない CLI のイベント駆動検知ルート)。
+    // ConEmu 拡張の OSC 9;9 (cwd 通知) 等と衝突しないよう "数字のみ" は無視する。
+    term.parser.registerOscHandler(9, (data) => {
+      try {
+        const text = String(data || '');
+        if (text && !/^\d+(;|$)/.test(text)) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: 'osc_notify', data: text }));
+        }
+      } catch (_) { /* 通知中継の失敗はターミナル動作に影響させない */ }
+      return true; // 既定処理は不要 (xterm.js は OSC9 を標準解釈しない)
+    });
+
+    // OSC 52 (クリップボード書込): Claude Code 等の TUI は選択/コピー時に
+    // OSC52 (`\x1b]52;c;<base64>\x07`) でクリップボード設定を要求するが、xterm は
+    // 既定で無視するため「Copied と表示されるのに実際はコピーされない」状態だった。
+    // base64 をデコードして C# (copy ハンドラ = Windows クリップボード) へ渡す。
+    // 信頼できない端末出力からの過大なクリップボード書込 (pastejacking 増幅) を抑止する上限。
+    const OSC52_MAX_B64 = 128 * 1024;
+    term.parser.registerOscHandler(52, (data) => {
+      try {
+        const s = String(data || '');
+        const sep = s.indexOf(';');         // "<targets>;<base64>"
+        if (sep >= 0) {
+          const b64 = s.slice(sep + 1);
+          // '?' は読み取り要求 (非対応)、過大な base64 は破棄 (atob のコストも回避)。
+          if (b64 && b64 !== '?' && b64.length <= OSC52_MAX_B64) {
+            const text = decodeURIComponent(escape(atob(b64))); // base64 → UTF-8
+            // source:'osc52' を付け、C# 側で「端末出力由来の無操作コピー」を
+            // ユーザー選択コピーと区別して上限・監査できるようにする。
+            if (text) window.chrome.webview.postMessage(JSON.stringify({ type: 'copy', data: text, source: 'osc52' }));
+          }
+        }
+      } catch (_) { /* デコード失敗は無視 */ }
+      return true; // 既定処理なし (xterm の OSC52 既定は無効)
+    });
+
+    // --- マウスホイールのスクロール量を正規化 ---
+    // ネイティブスクロールは .xterm-viewport を overflow-y:hidden にして無効化済み。
+    // まず wheel イベントから「ノッチ数 (±整数)」を見積もる:
+    //   ・PIXEL: |deltaY|>=40px は離散ノッチ=±1、微小フラグメントは 40px 累積で 1 ノッチ。
+    //   ・LINE / PAGE: 1 イベント=1 ノッチ。
+    // そのうえで:
+    //   ・amm 制御ペイン (cmd/PowerShell/Codex 等、mouse tracking 無効): 1 ノッチ=
+    //     WHEEL_LINES_PER_NOTCH 行で term.scrollLines (alt 画面は矢印キー)。1 行は遅すぎ
+    //     との指摘で 3 行に調整。
+    //   ・mouse tracking 有効ペイン (Claude Code 等): 行数は CLI が決めるので amm からは
+    //     変えられない。代わりにホイールレポートを間引き、WHEEL_TRACKING_NOTCHES_PER_REPORT
+    //     ノッチごとに 1 回だけ xterm にレポートを送らせて体感速度を下げる
+    //     (速すぎとの指摘への対処。間引き値は要調整)。
+    const WHEEL_PIXEL_NOTCH = 40;                 // 離散ノッチ判定 / 累積単位 (px)
+    const WHEEL_LINES_PER_NOTCH = 3;              // amm 制御ペインの 1 ノッチあたり行数
+    const WHEEL_TRACKING_NOTCHES_PER_REPORT = 2;  // tracking ペイン: N ノッチで 1 レポート
+    let wheelAccumPx = 0;
+    let trackingNotchAccum = 0;
+    term.attachCustomWheelEventHandler((ev) => {
+      if (ev.deltaY === 0 || ev.shiftKey) return true; // 横/ゼロは既定へ
+
+      // ノッチ数 (±整数) を見積もる
+      let notches;
+      if (ev.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
+        if (Math.abs(ev.deltaY) >= WHEEL_PIXEL_NOTCH) {
+          notches = ev.deltaY < 0 ? -1 : 1;
+          wheelAccumPx = 0;
+        } else {
+          if ((wheelAccumPx > 0) !== (ev.deltaY > 0)) wheelAccumPx = 0; // 方向転換でリセット
+          wheelAccumPx += ev.deltaY;
+          notches = (wheelAccumPx / WHEEL_PIXEL_NOTCH) | 0;
+          wheelAccumPx -= notches * WHEEL_PIXEL_NOTCH;
+        }
+      } else {
+        notches = ev.deltaY < 0 ? -1 : 1;
+      }
+      if (notches === 0) return false;
+
+      // mouse tracking 有効: ノッチを間引いて N ノッチごとに 1 回だけ xterm に
+      // レポートを送らせる (true=送出 / false=抑止)。行数は CLI 任せ。
+      if (term.modes.mouseTrackingMode !== 'none') {
+        if ((trackingNotchAccum > 0) !== (notches > 0)) trackingNotchAccum = 0; // 方向転換
+        trackingNotchAccum += notches;
+        if (Math.abs(trackingNotchAccum) >= WHEEL_TRACKING_NOTCHES_PER_REPORT) {
+          trackingNotchAccum = 0;
+          return true; // このイベントだけ xterm にマウスレポートを送らせる
+        }
+        return false;  // 間引き
+      }
+
+      const lines = Math.abs(notches) * WHEEL_LINES_PER_NOTCH;
+      const dir = notches < 0 ? -1 : 1;
+      if (term.buffer.active.type === 'alternate') {
+        const seq = '\x1b' + (term.modes.applicationCursorKeysMode ? 'O' : '[') + (dir < 0 ? 'A' : 'B');
+        window.chrome.webview.postMessage(JSON.stringify({ type: 'input', data: seq.repeat(lines) }));
+      } else {
+        term.scrollLines(dir * lines);
+      }
+      return false; // ネイティブ/xterm 既定スクロールを抑止
+    });
+
+    // --- 検索バー (Ctrl+F 表示 / Esc 閉じる / Enter 次 / Shift+Enter 前) ---
+    const searchBar = document.getElementById('search-bar');
+    const searchInput = document.getElementById('search-input');
+    function showSearchBar() {
+      searchBar.style.display = 'block';
+      searchInput.value = term.getSelection() || searchInput.value || '';
+      searchInput.focus();
+      searchInput.select();
+    }
+    function hideSearchBar() {
+      searchBar.style.display = 'none';
+      term.focus();
+    }
+    function doSearchNext() {
+      if (searchInput.value) searchAddon.findNext(searchInput.value);
+    }
+    function doSearchPrev() {
+      if (searchInput.value) searchAddon.findPrevious(searchInput.value);
+    }
+    searchInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        if (ev.shiftKey) doSearchPrev(); else doSearchNext();
+        ev.preventDefault();
+      } else if (ev.key === 'Escape') {
+        hideSearchBar();
+        ev.preventDefault();
+      }
+    });
+    searchInput.addEventListener('input', () => doSearchNext());
+    document.getElementById('search-next').addEventListener('click', doSearchNext);
+    document.getElementById('search-prev').addEventListener('click', doSearchPrev);
+    document.getElementById('search-close').addEventListener('click', hideSearchBar);
+
+    // ターミナル動作に影響する C# 側の設定を保持 (config メッセージで更新される)
+    const cfg = {
+      ctrlCCopyOnSelection: true,
+    };
+
+    const DEFAULT_FONT_SIZE = 13;
+    const MIN_FONT_SIZE = 8;
+    const MAX_FONT_SIZE = 32;
+    function changeFontSize(delta) {
+      const next = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, (term.options.fontSize || DEFAULT_FONT_SIZE) + delta));
+      term.options.fontSize = next;
+      fitAddon.fit();
+    }
+    function resetFontSize() {
+      term.options.fontSize = DEFAULT_FONT_SIZE;
+      fitAddon.fit();
+    }
+    function setFontSize(size) {
+      const n = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Number(size) || DEFAULT_FONT_SIZE));
+      term.options.fontSize = n;
+      fitAddon.fit();
+    }
+
+    // Ctrl+Shift+C / Ctrl+Insert: 選択内容を C# クリップボードへ送る。
+    // Ctrl+C 単体は cfg.ctrlCCopyOnSelection が true かつ選択あり時にコピー、
+    // それ以外は xterm.js に渡して ^C を子プロセスへ送る。
+    // xterm.js のデフォルト paste (Ctrl+V / Shift+Insert) は C# 経由に置換済。
+    term.attachCustomKeyEventHandler(ev => {
+      if (ev.type !== 'keydown') return true;
+      const isCopyCombo =
+        (ev.ctrlKey && ev.shiftKey && (ev.key === 'C' || ev.key === 'c')) ||
+        (ev.ctrlKey && ev.key === 'Insert');
+      if (isCopyCombo) {
+        const sel = term.getSelection();
+        if (sel && sel.length > 0) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: 'copy', data: sel }));
+        }
+        return false; // terminal に Ctrl+Shift+C を流さない
+      }
+
+      // 単独 Ctrl+C (Shift なし・Alt なし): 設定と選択状況で挙動を切り替える
+      if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && (ev.key === 'c' || ev.key === 'C')) {
+        if (cfg.ctrlCCopyOnSelection && term.hasSelection()) {
+          const sel = term.getSelection();
+          if (sel && sel.length > 0) {
+            window.chrome.webview.postMessage(JSON.stringify({ type: 'copy', data: sel }));
+            term.clearSelection();
+          }
+          return false; // ^C は送らない
+        }
+        return true; // 選択なし or 設定 OFF → xterm.js が ^C を送る
+      }
+
+      // フォントズーム Ctrl++ / Ctrl+- / Ctrl+0 (8〜32, 既定 13)
+      if (ev.ctrlKey && !ev.altKey) {
+        if (ev.key === '+' || ev.key === '=') { changeFontSize(+1); return false; }
+        if (ev.key === '-') { changeFontSize(-1); return false; }
+        if (ev.key === '0') { resetFontSize(); return false; }
+      }
+
+      // 検索 Ctrl+F / F3 / Shift+F3
+      if (ev.ctrlKey && !ev.altKey && !ev.shiftKey && (ev.key === 'f' || ev.key === 'F')) {
+        showSearchBar();
+        return false;
+      }
+      if (ev.key === 'F3') {
+        if (ev.shiftKey) doSearchPrev(); else doSearchNext();
+        return false;
+      }
+
+      // Ctrl+V / Ctrl+Shift+V / Shift+Insert: C# 経由で貼付。
+      // WebView2 の navigator.clipboard 権限に依存せず、後続 D-3 でマルチライン
+      // 確認ダイアログを挟める。
+      const isPasteCombo =
+        (ev.ctrlKey && !ev.shiftKey && (ev.key === 'v' || ev.key === 'V')) ||
+        (ev.ctrlKey && ev.shiftKey && (ev.key === 'V' || ev.key === 'v')) ||
+        (!ev.ctrlKey && ev.shiftKey && ev.key === 'Insert');
+      if (isPasteCombo) {
+        // ブラウザ既定の paste 動作を止める。止めないと paste イベントが
+        // textarea に届いて xterm.js が onData 経由で子プロセスへ流してしまい、
+        // C# 側の確認ダイアログで Cancel しても貼付が完了してしまう。
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        window.chrome.webview.postMessage(JSON.stringify({ type: 'paste_request' }));
+        return false;
+      }
+      return true;
+    });
+
+    // Resize notification to C#
+    term.onResize(({ cols, rows }) => {
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'resize', cols, rows }));
+    });
+    new ResizeObserver(() => fitAddon.fit()).observe(document.getElementById('terminal'));
+
+    // ウィンドウが再度フォーカスを得たときに xterm.js も再フォーカスさせる。
+    // これをしないと、MDI 子ウィンドウのタイトルバー経由でフォーカスが
+    // 戻っても DOM 側では xterm.js に focus が入っておらず、カーソルが
+    // 描画されない。
+    window.addEventListener('focus', () => term.focus());
+    // クリック時: term にフォーカスを入れつつ、C# 側に通知して MDI 子の
+    // activation を明示的に起こす。WebView2 の HTML 領域クリックは
+    // WinForms の MOUSEACTIVATE チェーンに乗らないことがあり、
+    // MdiChildActivate が発火せず親フォームのステータスバーが更新
+    // されないケースを回避する。
+    document.addEventListener('click', () => {
+      term.focus();
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'click_activate' }));
+    });
+
+    // Receive output from C#
+    window.chrome.webview.addEventListener('message', e => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'output') {
+        term.write(msg.data);
+      } else if (msg.type === 'paste_response') {
+        if (typeof msg.data === 'string' && msg.data.length > 0) {
+          // 貼付テキストが直近に前方転送した確定チャンクと偶然一致しても、IME 二重
+          // 発火ガード (lastForward) に吸われて破棄されないよう、記録を無効化してから
+          // 貼り付ける。(旧 imeConfirmed 参照のままだと未定義変数で例外になり、
+          // paste_response が term.paste まで到達せず MDI への貼付が無効化されていた。)
+          // 保留中の IME バーストはペーストと混ざらないよう先に確定させる。
+          flushBurst();
+          // 直前 forward 履歴もクリアする。残っていると、貼付内容が直近の IME 確定と
+          // 偶然一致したとき非隣接 dedup(4) に貼付が誤って吸われ得る。
+          lastForward = { text: '', time: 0, keySeq: keyDownSeq };
+          recentForwards.length = 0;
+          term.paste(msg.data);
+        }
+      } else if (msg.type === 'clear') {
+        term.clear();
+      } else if (msg.type === 'select_all') {
+        term.selectAll();
+      } else if (msg.type === 'config') {
+        if (typeof msg.ctrlCCopyOnSelection === 'boolean') {
+          cfg.ctrlCCopyOnSelection = msg.ctrlCCopyOnSelection;
+        }
+        if (msg.theme && typeof msg.theme === 'object') {
+          // 既存 theme にマージ (部分指定を許可)
+          term.options.theme = Object.assign({}, term.options.theme, msg.theme);
+        }
+        if (typeof msg.fontSize === 'number' && msg.fontSize > 0) {
+          setFontSize(msg.fontSize);
+        }
+      } else if (msg.type === 'font_size') {
+        // システムメニュー「フォントサイズ」からの per-MDI 即時切替 (保存なし)
+        setFontSize(msg.size);
+      }
+    });
+
+    // paste イベントの二重防衛。keydown の preventDefault を抜けて paste が
+    // 走るケースに備え、document capture で問答無用に止める (C# ダイアログが
+    // 出ている間に xterm.js が先に貼ってしまうのを防ぐ)。
+    document.addEventListener('paste', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }, true);
+
+    // (ファイル drop は C# 側で Win32 IDropTarget 経由で横取りしているため、
+    //  JS 側のリスナは不要。WebView2 の HWND に登録された IDropTarget が先に
+    //  呼ばれて OS から絶対パスが渡ってくる。)
+
+    // 右クリックの mousedown で xterm が選択を解除してしまうことがあり、その後の
+    // contextmenu 時には term.getSelection() が空になって [コピー] が無効化される。
+    // capture フェーズ (xterm のハンドラより先) で右ボタン押下時の選択を退避しておく。
+    let lastSelectionForMenu = '';
+    document.addEventListener('mousedown', (ev) => {
+      if (ev.button === 2) {
+        lastSelectionForMenu = term.getSelection() || '';
+        // 右クリックは amm のコンテキストメニュー専用にする。マウスレポート有効な TUI
+        // (Claude Code 等) では xterm が右ボタン押下をマウスレポートとしてアプリへ送り、
+        // アプリが貼り付け等を実行してしまう ("右クリックだけで送信される")。capture
+        // フェーズで stopPropagation して xterm のハンドラに渡さず送出を抑止する
+        // (OS 由来の contextmenu イベントは別途発火するのでメニューは出る)。
+        ev.stopPropagation();
+      }
+    }, true);
+
+    // 右クリック: 既定の WebView2 コンテキストメニューを抑止し、選択中テキストを
+    // 添えて C# に通知。C# 側で WinForms の ContextMenuStrip を表示する。
+    // 解除済みなら右ボタン押下時に退避した選択 (lastSelectionForMenu) を使う。
+    document.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      const sel = term.getSelection() || lastSelectionForMenu || '';
+      window.chrome.webview.postMessage(JSON.stringify({
+        type: 'context_menu',
+        selectedText: sel,
+        lastText: lastForward.text,
+      }));
+    });
+
+    // ---- IME (仮名漢字変換) 入力: 送信元を term.onData の 1 本に統一 ----
+    // 確定テキストは xterm.js 内部の CompositionHelper が composition を処理し、
+    // 確定時に term.onData へ 1 回だけ流し込む (変換進行中の onData は xterm 側で
+    // バッファされ、確定時にまとめて発火する)。通常タイピングも onData を通る。
+    // よってターミナルへの入力経路はすべて term.onData で受けられる。
+    //
+    // かつては document の compositionend キャプチャでも同じ確定テキストを送り、
+    // onData と二重に届くぶんをテキスト一致 + 400ms TTL で重複排除していた
+    // (パターン A/B/B'/B'')。だが IME / WebView2 / xterm の helperTextarea 再配置
+    // タイミングが競合すると — その症状として IME 候補ウィンドウが caret ではなく
+    // 画面左上や MDI 右端に出る — onData と compositionend の発火順・テキスト内容
+    // が想定パターンから外れ、テキスト一致での重複排除に失敗して二重送信していた。
+    // 送信元を onData 1 本に絞ることで、二系統の重複排除という競合の温床ごと排除
+    // する。imeSuppressQueue / imeActive / compositionend 送信は全廃。
+    //
+    // ---- 同一確定テキストの onData 二重発火ガード (composition 活動ベース) ----
+    // onData 1 本化後も「SPACE で変換確定 → ENTER」で確定テキストが二重送信される
+    // 事象が残存する (IME 候補ウィンドウが caret ではなく画面左上に出るとき頻発)。
+    // 原因は xterm 内部 CompositionHelper の確定送出 (compositionend → setTimeout 0 で
+    // triggerDataEvent) と textarea の input イベント送出が競合し、同一確定テキストが
+    // term.onData に 2 回流れること。xterm 内部のレースなので onData 受信側で吸収する。
+    //
+    // 過去の実装は (a) compositionend.ev.data 基準、(b) compositionSeq (= compositionstart
+    // 採番) + compositionEndAt 基準、を試したが、候補ウィンドウ誤配置時に
+    //   ・compositionend が確定テキスト付きで来ない / そもそも遅延・欠落する
+    //   ・2 つの重複の間に余計な compositionstart が割り込み seq がズレる
+    // ことがあり二重送信が残っていた。
+    //
+    // 本実装は seq も compositionend.data も使わず、「composition の活動 (start/update/
+    // end のいずれか) が直近 IME_ARM_MS 以内にあった or 進行中」を IME 入力の目印にし、
+    // その状態で「直前に前方転送したチャンクと同一テキストが GAP 以内に再到来」したら
+    // 重複として 1 回だけ破棄する。compositionstart は変換開始時に必ず発火するので
+    // arming は誤配置時でも成立する。GAP(250ms) は内部競合 (~数 ms) を確実に捉えつつ、
+    // 人手の再変換確定 (>>250ms) は誤破棄しない。IME 非使用のキーリピートは composition
+    // 活動が無いので影響しない。
+    const IME_ARM_MS = 600;      // composition 活動から「IME 入力中/直後」とみなす窓
+    const IME_DUP_GAP_MS = 250;  // 同一チャンク連続転送を重複とみなす間隔上限 (IME arming 時)
+    const HARD_DUP_GAP_MS = 30;  // composition 不在でも破棄する「物理的に不可能」な同一チャンク間隔。
+                                 // ただし OS オートリピート (keydown.repeat=true) は環境によりこの間隔
+                                 // を割り込む (実機で Backspace 長押しが ~22〜30ms 間隔 → 正規入力を誤食い・
+                                 //  診断ログ洪水で OOM)。よって repeat=true のときは (2) を適用しない
+                                 //  (合成/内部二重は repeat=false のままなので取りこぼさない)。
+    const DIAG_MAX_PER_SEC = 30; // ime_diag の暴走上限。超過分は捨て、復帰時に件数を 1 行だけ残す。
+    let compositionActive = false;
+    let lastCompositionAt = 0;            // 最後の composition 活動 (start/update/end) 時刻
+    let keyDownSeq = 0;                    // keydown 連番。物理打鍵 / OS オートリピート 1 回ごとに +1
+    let lastKeyWasRepeat = false;          // 直近 keydown が OS オートリピート (KeyboardEvent.repeat) か
+    let lastKeyDownAt = 0;                 // 直近 keydown の時刻。repeat フラグの stale 化判定 (TTL) に使う
+    let lastForward = { text: '', time: 0, keySeq: -1 }; // 直近に前方転送した onData チャンク (keySeq=その時点の keyDownSeq)
+    // IME 確定チャンクの「非隣接」二重送信を捕捉する短い履歴リング。lastForward は直前
+    // 1 件しか見ないため「確定テキスト → Enter 等 → 確定テキスト(重複)」のように間に別
+    // チャンクが割り込むと sameAsLast が不成立で (1) を素通りし、二重が残っていた。
+    // forward 済みチャンクのみ積む (破棄したものは積まない)。used=履歴 dedup で消費済み。
+    const recentForwards = []; // { text, time, keySeq, used }
+    function pushRecent(text, time, keySeq) {
+      recentForwards.push({ text, time, keySeq, used: false });
+      if (recentForwards.length > 10) recentForwards.shift();
+    }
+    // 直近 forward 履歴を新しい方から windowMs 内でスキャンし、同一テキストの最初の
+    // ヒットを返す。requireUnused=true なら未消費 (まだ dedup していない) 物のみ対象。
+    function findRecentDup(data, now, windowMs, requireUnused) {
+      for (let i = recentForwards.length - 1; i >= 0; i--) {
+        const e = recentForwards[i];
+        if (now - e.time > windowMs) return null; // これより古い物は時系列で全て窓外
+        if (e.text === data && (!requireUnused || !e.used)) return e;
+      }
+      return null;
+    }
+
+    // --- 診断用: composition イベントの直近トレイル (二重送信調査) ---
+    // 重複が「破棄された」「すり抜けた」いずれの場合も、その瞬間の composition
+    // タイムラインを app.log に残し、ガードが効かない原因 (arming 不成立 / gap 超過 /
+    // composition イベント自体が来ていない 等) を切り分けられるようにする。
+    const compTrail = []; // { type:'s'|'u'|'e', t }
+    function pushComp(type) {
+      compTrail.push({ type, t: performance.now() });
+      if (compTrail.length > 12) compTrail.shift();
+    }
+    function imeTrailStr(now) {
+      return compTrail.map(e => `${e.type}${Math.round(e.t - now)}`).join(',');
+    }
+    // ime_diag レート制限。診断は C# 側で UI スレッド上の同期ファイル I/O になるため、
+    // 大量発火すると WebView2 メッセージキューが膨張し OOM する。1 秒窓で最大
+    // DIAG_MAX_PER_SEC 件に制限し、超過分は黙って捨てる。窓が切り替わるとき、直前窓で
+    // 抑制した件数があれば 1 行だけ diag_suppressed で残す (取りこぼしを可視化)。
+    let diagWindowStart = 0, diagCount = 0, diagSuppressed = 0;
+    function postDiag(obj) { window.chrome.webview.postMessage(JSON.stringify(obj)); }
+    function imeDiag(reason, data, now, extra) {
+      if (now - diagWindowStart > 1000) {
+        if (diagSuppressed > 0) {
+          postDiag({ type: 'ime_diag', reason: 'diag_suppressed', data: '',
+                     detail: `suppressed=${diagSuppressed} (rate>${DIAG_MAX_PER_SEC}/s)` });
+        }
+        diagWindowStart = now; diagCount = 0; diagSuppressed = 0;
+      }
+      if (diagCount >= DIAG_MAX_PER_SEC) { diagSuppressed++; return; }
+      diagCount++;
+      postDiag({
+        // 機密保護: 入力本文 (data) は送らない。パスワード/API キー/社内文字列が
+        // app.log に平文で残るのを防ぐ。診断には len/charCode のみで十分。
+        type: 'ime_diag',
+        reason,
+        detail: `len=${data.length} code=${data.length === 1 ? data.charCodeAt(0) : 'multi'}`
+          + ` gap=${Math.round(now - lastForward.time)}ms keySeqDelta=${keyDownSeq - lastForward.keySeq}`
+          + ` sinceComp=${Math.round(now - lastCompositionAt)}ms active=${compositionActive}`
+          + ` imeRecent=${compositionActive || (now - lastCompositionAt) <= IME_ARM_MS}`
+          + ` trail=[${imeTrailStr(now)}]`
+          + (extra ? ` ${extra}` : ''),
+      });
+    }
+
+    document.addEventListener('compositionstart', () => {
+      compositionActive = true; lastCompositionAt = performance.now(); pushComp('s');
+    }, true);
+    document.addEventListener('compositionupdate', () => {
+      lastCompositionAt = performance.now(); pushComp('u');
+    }, true);
+    document.addEventListener('compositionend', () => {
+      compositionActive = false; lastCompositionAt = performance.now(); pushComp('e');
+    }, true);
+    // keydown は物理打鍵および OS オートリピート (repeat=true) ごとに 1 回ずつ発火する。
+    // 「同一 keyDownSeq のまま同一チャンクが 2 回 onData に届く」= 1 打鍵が 2 回流れた xterm 内部
+    // 重複 (triggerDataEvent + textarea input の競合)。オートリピートは keydown が進み seq が変わる
+    // ので別物として温存できる。gap が一定しない (4〜60ms 超) 二重送信を gap 非依存で捕捉する鍵。
+    // keydown は「ユーザの新しい入力アクション」の境界。保留中の確定バーストをここで確定
+    // させることで、次の確定の 1 巡目が前の入力と混ざらない (バーストは keydown と idle で区切る)。
+    document.addEventListener('keydown', (e) => { flushBurst(); keyDownSeq++; lastKeyWasRepeat = e.repeat === true; lastKeyDownAt = performance.now(); }, true);
+
+    // ---- IME/TSF 確定バーストのコアレッサ (「ところところ」対策) ----
+    // keySeqDelta=0 (キー入力を伴わない) 非 ESC の onData は TSF 直接確定 / xterm 内部の
+    // 二重 emit 経路。実機ログでは確定文字列 X が XX と二重送出され、しかも複数文字が
+    // 1 文字ずつ分割されて来る (と,こ,ろ,と,こ,ろ) ため、隣接比較ベースの系統(1)〜(4)では
+    // 取りこぼす (2 巡目が sameAsLast=false / imeRecent=false)。そこでキー入力を伴わない
+    // 連続 onData を短時間束ね、「2 チャンク以上 かつ バッファ全体が厳密な二重 (前半===後半)」
+    // のときだけ前半のみを送る。これで「ところところ→ところ」「何を何を→何を」「んん→ん」を
+    // 統一的に補正できる。通常キーボード入力 (keyDownSeq が進む) と マウス/矢印 (ESC 始まり)
+    // は対象外で即時素通し (遅延ゼロ)。単一チャンクは半減しない (右クリック貼り付け "abab"
+    // 等を誤って半減させない)。
+    let burst = '';
+    let burstCount = 0;         // バーストに集まった onData チャンク数
+    let burstTimer = null;
+    const BURST_FLUSH_MS = 12;  // この時間 onData が途切れたらバースト確定 (通常入力のエコー遅延の上限)
+
+    function doForward(text, now) {
+      lastForward = { text, time: now, keySeq: keyDownSeq };
+      pushRecent(text, now, keyDownSeq);
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'input', data: text }));
+    }
+    function flushBurst() {
+      if (burstTimer !== null) { clearTimeout(burstTimer); burstTimer = null; }
+      if (burst.length === 0) return;
+      let text = burst;
+      const count = burstCount;
+      burst = ''; burstCount = 0;
+      const now = performance.now();
+      const n = text.length;
+      if (count >= 2 && n >= 2 && (n % 2 === 0) && text.slice(0, n / 2) === text.slice(n / 2)) {
+        // 厳密な二重 → 前半のみ採用。本文は imeDiag で送らない (機密保護)。
+        imeDiag('burst_halved', text.slice(0, n / 2), now, `chunks=${count} dropped_len=${n / 2}`);
+        text = text.slice(0, n / 2);
+      } else if (count >= 2) {
+        // 複数チャンクだが厳密二重ではない → そのまま送る。二重がまだ残る場合の調査用に、
+        // 形状 (chunks 数 / 長さ / 偶奇) だけ記録する (本文は出さない)。バースト分裂
+        // (1 巡目と 2 巡目が別バーストに割れる) なら chunks=2,len=2 等が 2 回出る。
+        imeDiag('burst_kept', text, now, `chunks=${count} even=${n % 2 === 0}`);
+      }
+      doForward(text, now);
+    }
+
+    // Forward key input to C#
+    // 非 ESC の onData は全てコアレッサへ束ねる。バーストの区切りは (a) keydown (上のハンドラの
+    // flushBurst) と (b) idle (BURST_FLUSH_MS)。確定文字列が二重送出されるとき、1 巡目は確定キー
+    // 直後 (keydown あり) に、2 巡目はキー入力なしで来る。旧実装はこの 1 巡目をバースト外に弾いて
+    // 取りこぼしていた。本実装は「keydown が両巡の前で 1 回起き、両巡の間には keydown が無い」
+    // 性質を使い、確定キー後の連続 onData (1 巡目+2 巡目) を 1 バーストにまとめて XX→X 半減する。
+    // 通常キー入力は次の keydown か ≤BURST_FLUSH_MS の idle で即フラッシュ → エコー遅延は体感不可。
+    // ESC 始まり (矢印/マウスレポート) は束ねず即時素通し (制御列の遅延・誤半減を避ける)。
+    term.onData(data => {
+      if (data.length === 0) return;
+      if (data.charCodeAt(0) === 0x1b) { // ESC 始まりの制御列は即時送出
+        flushBurst();
+        doForward(data, performance.now());
+        return;
+      }
+      burst += data; burstCount++;
+      if (burstTimer !== null) clearTimeout(burstTimer);
+      burstTimer = setTimeout(flushBurst, BURST_FLUSH_MS);
+    });
+
+    // Notify C# that terminal is ready with initial size
+    window.chrome.webview.postMessage(JSON.stringify({
+      type: 'ready',
+      cols: term.cols,
+      rows: term.rows
+    }));
+  </script>
+</body>
+</html>

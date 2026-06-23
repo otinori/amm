@@ -1,0 +1,23 @@
+<!--
+  NuGet 中央パッケージ管理（CPM）の雛形。
+
+  注意: 現状は ManagePackageVersionsCentrally を false にしており、各 csproj の
+  PackageReference に書かれたバージョンをそのまま使う（＝ビルド非破壊のスキャフォルド）。
+  CPM を有効化するには:
+    1. 下を true にする
+    2. 各 csproj の PackageReference から Version 属性を除く
+    3. ここに <PackageVersion Include="..." Version="..." /> を集約する
+  バージョン統一の footgun を避けるため段階導入とする。
+-->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 有効化時に集約する例:
+    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    -->
+  </ItemGroup>
+</Project>

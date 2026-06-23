@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>amm</AssemblyName>
+    <RootNamespace>Amm</RootNamespace>
+    <Product>amm</Product>
+    <!-- Version は Directory.Build.props で一元管理 -->
+    <Title>amm</Title>
+    <Description>Standalone multi-agent operator console with optional Companion integration.</Description>
+    <ApplicationIcon>Resources\amm.ico</ApplicationIcon>
+    <!-- MSB3277: WebView2.Wpf DLL 由来の WindowsBase 5.0.0.0 vs .NET 9 の 4.0.0.0 のバージョン
+         競合警告。WPF は使っておらず機能影響なし。プライマリ参照 (.NET 9) が選ばれる -->
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Amm.Tests" />
+  </ItemGroup>
+
+  <!-- 発行プロファイル (src/publish/Amm/*.pubxml) を opt-in で取り込む。
+       SDK は絶対パスの PublishProfile を解決しないため明示 Import する。
+       AmmPublishProfile 未指定の通常 build/test には影響しない。
+       例: dotnet publish ... -p:AmmPublishProfile=win-x64-singlefile -->
+  <Import Project="..\..\publish\Amm\$(AmmPublishProfile).pubxml"
+          Condition="'$(AmmPublishProfile)' != ''" />
+
+  <ItemGroup>
+    <Content Include="Resources\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="profiles.amm">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- docs/manual/user-guide/usage.md を publish 出力直下へ配置し MSI harvest に含める。
+         Link で出力ルート (階層構造を持ち込まず usage.md として配置)。 -->
+    <Content Include="..\..\..\docs\manual\user-guide\usage.md" Link="usage.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

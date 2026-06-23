@@ -1,0 +1,9 @@
+amm
+Copyright (c) The amm authors.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+本製品は第三者ソフトウェアを含みます。各ソフトウェアの帰属表示・ライセンス全文は
+THIRD-PARTY-NOTICES.md を参照してください。
+
+（このファイルは配布物に同梱する帰属表示です。OSS 依存の変化に応じて
+  tools/ の生成スクリプトで再生成する想定です。手動編集は最小限に留めてください。）

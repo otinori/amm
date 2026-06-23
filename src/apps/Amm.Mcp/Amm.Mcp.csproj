@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>amm-mcp</AssemblyName>
+    <Product>amm MCP Bridge</Product>
+    <Title>amm MCP Bridge</Title>
+    <Description>stdio MCP server that relays JSON-RPC to the amm GUI via Named Pipe.</Description>
+    <RootNamespace>Amm.Mcp</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BuildApproveOutput 等の internal をテストから検証する -->
+    <InternalsVisibleTo Include="Amm.Tests" />
+  </ItemGroup>
+
+  <!-- 発行プロファイル (src/publish/Amm.Mcp/*.pubxml) を opt-in で取り込む。
+       SDK は絶対パスの PublishProfile を解決しないため明示 Import する。
+       AmmPublishProfile 未指定の通常 build/test には影響しない。
+       例: dotnet publish ... -p:AmmPublishProfile=win-x64-singlefile -->
+  <Import Project="..\..\publish\Amm.Mcp\$(AmmPublishProfile).pubxml"
+          Condition="'$(AmmPublishProfile)' != ''" />
+
+</Project>
