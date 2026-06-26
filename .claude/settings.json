@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "udr@udr-marketplace": true
+    "udr@udr-marketplace": true,
+    "conclave@conclave-marketplace": true
   }
 }
