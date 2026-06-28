@@ -127,11 +127,19 @@ public partial class MdiParentForm : Form, IMcpHost
 
         InitializeComponents();
         LoadProfiles();
-        _trayManager = new TrayIconManager(this, child =>
-        {
-            if (child == null || child.IsDisposed) return;
-            child.Activate();
-        });
+        _trayManager = new TrayIconManager(this,
+            child =>
+            {
+                if (child == null || child.IsDisposed) return;
+                child.Activate();
+            },
+            child =>
+            {
+                if (child == null || child.IsDisposed) return;
+                child.WindowState = FormWindowState.Maximized;
+                child.Activate();
+                child.FocusTerminal();
+            });
         LoadLayout();
         // LoadLayout 内で _inputHistory.SetMaxEntries (HistoryMaxEntries) を
         // 反映済み。LoadHistory はそれを踏まえた上限で読み込むので順序が重要。
@@ -1048,6 +1056,7 @@ public partial class MdiParentForm : Form, IMcpHost
         var fileOpenItem = (ToolStripMenuItem)fileMenu.DropDownItems.Add(
             "AMM を開く(&O)...", null, (_, _) => OnFileOpen());
         fileOpenItem.ToolTipText = "Shift を押しながら開くと autoStartCount による自動起動を抑止します。";
+        fileMenu.DropDownItems.Add(new ToolStripSeparator());
         fileMenu.DropDownItems.Add("上書き保存(&S)", null, (_, _) => OnFileSave());
         fileMenu.DropDownItems.Add("名前を付けて保存(&A)...", null, (_, _) => OnFileSaveAs());
         fileMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -3068,13 +3077,19 @@ public partial class MdiParentForm : Form, IMcpHost
                 btn.FlatAppearance.BorderColor = Color.FromArgb(160, 160, 160);
                 btn.FlatAppearance.BorderSize = 1;
                 // 色優先順位:
+                //   最小化         → グレー背景 (最小化中を一目で識別)
                 //   許可・確認待ち → オレンジ背景 (attention、最優先で気付かせる)
                 //   入力待ち       → 黄背景 (アクティブでも黄色を消さない)
                 //   アクティブ子   → 薄青背景 (太字 + 青枠で強調)
                 //   それ以外       → 既定 (ControlLight)
+                bool isMinimized = child.WindowState == FormWindowState.Minimized;
                 bool isWaiting = child.CurrentWaitState == WaitState.WaitingForInput;
                 bool isActive = ReferenceEquals(ActiveMdiChild, child);
-                if (isWaiting && child.HasAttention)
+                if (isMinimized)
+                {
+                    btn.BackColor = Color.FromArgb(200, 200, 200); // グレー: 最小化
+                }
+                else if (isWaiting && child.HasAttention)
                 {
                     btn.BackColor = Color.FromArgb(255, 180, 100); // オレンジ: 許可・確認待ち
                 }
@@ -3338,7 +3353,10 @@ public partial class MdiParentForm : Form, IMcpHost
     /// </summary>
     private void TileMdiInOpenOrder(MdiLayout layout)
     {
-        var alive = _childOrder.Where(c => !c.IsDisposed && c.Visible).ToList();
+        // 最小化中の子は並び替え対象外 (最小化状態を維持したまま残す)。
+        var alive = _childOrder
+            .Where(c => !c.IsDisposed && c.Visible && c.WindowState != FormWindowState.Minimized)
+            .ToList();
         if (alive.Count == 0) return;
 
         var mdiClient = Controls.OfType<MdiClient>().FirstOrDefault();
@@ -3373,15 +3391,32 @@ public partial class MdiParentForm : Form, IMcpHost
         int cellW = area.Width / cols;
         int cellH = area.Height / rows;
 
+        // 最終行のウィンドウ数を求め、不足分の横幅を均等拡張して隙間をなくす。
+        int lastRowStart = cols * (rows - 1);
+        int lastRowCount = n - lastRowStart;
+
         for (int i = 0; i < n; i++)
         {
             int row = i / cols;
             int col = i % cols;
-            int x = col * cellW;
+            bool isLastRow = (row == rows - 1);
+
+            int x, w;
+            if (isLastRow)
+            {
+                // 最終行のみ独自セル幅で均等割り → 余白なし
+                int lastCellW = area.Width / lastRowCount;
+                int lastCol = i - lastRowStart;
+                x = lastCol * lastCellW;
+                w = (lastCol == lastRowCount - 1) ? area.Width - x : lastCellW;
+            }
+            else
+            {
+                x = col * cellW;
+                w = (col == cols - 1) ? area.Width - x : cellW;
+            }
             int y = row * cellH;
-            // 右端 / 下端は端数を吸収。最終行が cols 未満で埋まる場合も同様。
-            int w = (col == cols - 1) ? area.Width - x : cellW;
-            int h = (row == rows - 1) ? area.Height - y : cellH;
+            int h = isLastRow ? area.Height - y : cellH;
             alive[i].SetBounds(x, y, w, h);
         }
     }
@@ -3396,7 +3431,10 @@ public partial class MdiParentForm : Form, IMcpHost
     /// </summary>
     private void TileMdiLinear(bool vertical)
     {
-        var alive = _childOrder.Where(c => !c.IsDisposed && c.Visible).ToList();
+        // 最小化中の子は並び替え対象外 (最小化状態を維持したまま残す)。
+        var alive = _childOrder
+            .Where(c => !c.IsDisposed && c.Visible && c.WindowState != FormWindowState.Minimized)
+            .ToList();
         if (alive.Count == 0) return;
 
         var mdiClient = Controls.OfType<MdiClient>().FirstOrDefault();
@@ -3577,6 +3615,28 @@ public partial class MdiParentForm : Form, IMcpHost
             fontMenu.DropDownItems.Add(item);
         }
         menu.Items.Add(fontMenu);
+
+        // 並び替え: _childOrder 上の位置を 1 つ上 / 下に移動。ボタンバーと
+        // 表示メニュー (DropDownOpening で自動更新) の両方に即時反映される。
+        menu.Items.Add(new ToolStripSeparator());
+        var curIdx = _childOrder.IndexOf(target);
+        var moveUpItem = new ToolStripMenuItem("上へ移動(&U)", null, (_, _) =>
+        {
+            var i = _childOrder.IndexOf(target);
+            if (i <= 0) return;
+            (_childOrder[i - 1], _childOrder[i]) = (_childOrder[i], _childOrder[i - 1]);
+            RefreshMdiButtonBar();
+        }) { Enabled = curIdx > 0 };
+        var moveDownItem = new ToolStripMenuItem("下へ移動(&D)", null, (_, _) =>
+        {
+            var i = _childOrder.IndexOf(target);
+            if (i < 0 || i >= _childOrder.Count - 1) return;
+            (_childOrder[i], _childOrder[i + 1]) = (_childOrder[i + 1], _childOrder[i]);
+            RefreshMdiButtonBar();
+        }) { Enabled = curIdx >= 0 && curIdx < _childOrder.Count - 1 };
+        menu.Items.Add(moveUpItem);
+        menu.Items.Add(moveDownItem);
+
         return menu;
     }
 
