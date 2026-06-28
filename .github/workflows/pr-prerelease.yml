@@ -3,7 +3,7 @@ name: PR Prerelease
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -24,6 +24,7 @@ permissions:
 jobs:
   prerelease:
     runs-on: windows-latest
+    if: github.event.pull_request.draft == false
 
     steps:
       - uses: actions/checkout@v7
