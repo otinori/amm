@@ -62,7 +62,7 @@ public sealed class McpRegistrationDialog : Form
         layout.Controls.Add(exeLabel);
         layout.SetColumnSpan(exeLabel, 2);
 
-        foreach (var kind in new[] { McpCliKind.ClaudeCode, McpCliKind.Codex, McpCliKind.CopilotCli })
+        foreach (var kind in new[] { McpCliKind.ClaudeCode, McpCliKind.Codex, McpCliKind.CopilotCli, McpCliKind.Antigravity })
         {
             var registeredCommand = McpCliRegistrar.GetRegisteredCommand(kind);
             var registered = registeredCommand != null;
@@ -97,7 +97,7 @@ public sealed class McpRegistrationDialog : Form
         // Claude Code / Copilot CLI は許可集約 (Level 2) も登録する。Codex は
         // notify + OSC9 通知による Level 1 (idle / attention 表示) まで。
         var isFirstHookRow = true;
-        foreach (var kind in new[] { McpCliKind.ClaudeCode, McpCliKind.Codex, McpCliKind.CopilotCli })
+        foreach (var kind in new[] { McpCliKind.ClaudeCode, McpCliKind.Codex, McpCliKind.CopilotCli, McpCliKind.Antigravity })
         {
             var hookCommand = HookCliRegistrar.GetRegisteredCommand(kind);
             var hookRegistered = hookCommand != null;

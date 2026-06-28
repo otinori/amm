@@ -3620,14 +3620,14 @@ public partial class MdiParentForm : Form, IMcpHost
         // 表示メニュー (DropDownOpening で自動更新) の両方に即時反映される。
         menu.Items.Add(new ToolStripSeparator());
         var curIdx = _childOrder.IndexOf(target);
-        var moveUpItem = new ToolStripMenuItem("上へ移動(&U)", null, (_, _) =>
+        var moveUpItem = new ToolStripMenuItem("左へ移動(&L)", null, (_, _) =>
         {
             var i = _childOrder.IndexOf(target);
             if (i <= 0) return;
             (_childOrder[i - 1], _childOrder[i]) = (_childOrder[i], _childOrder[i - 1]);
             RefreshMdiButtonBar();
         }) { Enabled = curIdx > 0 };
-        var moveDownItem = new ToolStripMenuItem("下へ移動(&D)", null, (_, _) =>
+        var moveDownItem = new ToolStripMenuItem("右へ移動(&R)", null, (_, _) =>
         {
             var i = _childOrder.IndexOf(target);
             if (i < 0 || i >= _childOrder.Count - 1) return;

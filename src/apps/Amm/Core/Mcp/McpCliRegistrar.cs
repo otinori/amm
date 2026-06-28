@@ -12,6 +12,7 @@ public enum McpCliKind
     ClaudeCode,
     Codex,
     CopilotCli,
+    Antigravity,
 }
 
 /// <summary>
@@ -43,6 +44,7 @@ public static class McpCliRegistrar
         McpCliKind.ClaudeCode => "Claude Code",
         McpCliKind.Codex => "Codex",
         McpCliKind.CopilotCli => "Copilot CLI",
+        McpCliKind.Antigravity => "Antigravity",
         _ => kind.ToString(),
     };
 
@@ -55,6 +57,7 @@ public static class McpCliRegistrar
             McpCliKind.ClaudeCode => Path.Combine(home, ".claude.json"),
             McpCliKind.Codex => Path.Combine(home, ".codex", "config.toml"),
             McpCliKind.CopilotCli => Path.Combine(home, ".copilot", "mcp-config.json"),
+            McpCliKind.Antigravity => Path.Combine(home, ".antigravity", "mcp-config.json"),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
     }
