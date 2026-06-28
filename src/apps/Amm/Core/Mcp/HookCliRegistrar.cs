@@ -43,6 +43,7 @@ public static class HookCliRegistrar
         McpCliKind.ClaudeCode => "Claude Code",
         McpCliKind.Codex => "Codex",
         McpCliKind.CopilotCli => "Copilot CLI",
+        McpCliKind.Antigravity => "Antigravity",
         _ => kind.ToString(),
     };
 
@@ -55,6 +56,7 @@ public static class HookCliRegistrar
             McpCliKind.ClaudeCode => Path.Combine(home, ".claude", "settings.json"),
             McpCliKind.Codex => Path.Combine(home, ".codex", "config.toml"),
             McpCliKind.CopilotCli => Path.Combine(home, ".copilot", "hooks", "amm-hooks.json"),
+            McpCliKind.Antigravity => Path.Combine(home, ".antigravity", "hooks", "amm-hooks.json"),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
     }
@@ -78,6 +80,7 @@ public static class HookCliRegistrar
                 McpCliKind.ClaudeCode => GetClaudeCommand(path),
                 McpCliKind.Codex => GetCodexCommand(path),
                 McpCliKind.CopilotCli => GetCopilotCommand(path),
+                McpCliKind.Antigravity => GetCopilotCommand(path),
                 _ => null,
             };
         }
@@ -96,6 +99,7 @@ public static class HookCliRegistrar
             case McpCliKind.ClaudeCode: RegisterClaude(path, mcpExePath); break;
             case McpCliKind.Codex: RegisterCodex(path, mcpExePath); break;
             case McpCliKind.CopilotCli: RegisterCopilot(path, mcpExePath); break;
+            case McpCliKind.Antigravity: RegisterAntigravity(path, mcpExePath); break;
             default: throw new ArgumentOutOfRangeException(nameof(kind));
         }
     }
@@ -110,6 +114,7 @@ public static class HookCliRegistrar
             case McpCliKind.ClaudeCode: UnregisterClaude(path); break;
             case McpCliKind.Codex: UnregisterCodex(path); break;
             case McpCliKind.CopilotCli: File.Delete(path); break; // 専有ファイルごと削除
+            case McpCliKind.Antigravity: File.Delete(path); break; // 専有ファイルごと削除
             default: throw new ArgumentOutOfRangeException(nameof(kind));
         }
     }
@@ -440,6 +445,40 @@ public static class HookCliRegistrar
                     {
                         ["type"] = "command",
                         ["command"] = $"cmd /c if exist \"{mcpExePath}\" \"{mcpExePath}\" approve --source copilot",
+                        ["timeoutSec"] = 60,
+                    },
+                },
+            },
+        };
+        WriteAtomicJson(path, root);
+    }
+
+    // ================================================================
+    // Antigravity (~/.antigravity/hooks/amm-hooks.json — amm 専有ファイル)
+    // ================================================================
+
+    private static void RegisterAntigravity(string path, string mcpExePath)
+    {
+        var root = new JsonObject
+        {
+            ["version"] = 1,
+            ["hooks"] = new JsonObject
+            {
+                ["agentStop"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "command",
+                        ["command"] = $"cmd /c if exist \"{mcpExePath}\" \"{mcpExePath}\" notify --state idle --source antigravity",
+                        ["timeoutSec"] = 10,
+                    },
+                },
+                ["permissionRequest"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "command",
+                        ["command"] = $"cmd /c if exist \"{mcpExePath}\" \"{mcpExePath}\" approve --source antigravity",
                         ["timeoutSec"] = 60,
                     },
                 },

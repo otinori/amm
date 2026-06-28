@@ -856,16 +856,15 @@ public static class SessionProfileLoader
         },
         new()
         {
-            Name = "Gemini",
-            Executable = "cmd.exe",
-            Args = ["/c", "%APPDATA%\\npm\\gemini.cmd"],
+            Name = "Antigravity",
+            Executable = "agy.exe",
+            Args = [],
             NewlineMode = NewlineMode.LF,
             OutputEncoding = "UTF-8",
             AutoChcp = false,
             WaitPatterns = ["^>", "^[❯›]"],
             WorkingDirectory = "%USERPROFILE%",
             UseBracketedPaste = true,
-            // AI CLI 系はプロジェクト単位で cwd を切り替えるのが普通の運用。
             SelectWorkingDirOnStart = true,
             PromptNewNameOnCommandAdd = true,
             QuickPrompts =

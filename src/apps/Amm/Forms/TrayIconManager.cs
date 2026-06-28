@@ -11,6 +11,7 @@ internal sealed class TrayIconManager : IDisposable
 {
     private readonly Form _owner;
     private readonly Action<TerminalChildForm?> _activateChild;
+    private readonly Action<TerminalChildForm?> _activateAndMaximize;
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _waitingMenu;
     private readonly ToolStripMenuItem _notifyMenuItem;
@@ -20,14 +21,18 @@ internal sealed class TrayIconManager : IDisposable
     private readonly Dictionary<TerminalChildForm, DateTime> _waitingChildren = new();
     // セッション別の最終バルーン表示時刻 (5秒 dedup)
     private readonly Dictionary<TerminalChildForm, DateTime> _lastBalloonShownAt = new();
+    // 最後にバルーン通知を出した子フォーム (ダブルクリック時の最大化ジャンプ先)
+    private TerminalChildForm? _lastBalloonChild;
 
     private const int BalloonDedupMs = 5000;
     private const int BalloonTimeoutMs = 5000;
 
-    public TrayIconManager(Form owner, Action<TerminalChildForm?> activateChild)
+    public TrayIconManager(Form owner, Action<TerminalChildForm?> activateChild,
+        Action<TerminalChildForm?> activateAndMaximize)
     {
         _owner = owner;
         _activateChild = activateChild;
+        _activateAndMaximize = activateAndMaximize;
 
         var contextMenu = new ContextMenuStrip();
 
@@ -56,6 +61,7 @@ internal sealed class TrayIconManager : IDisposable
             ContextMenuStrip = contextMenu,
         };
         _notifyIcon.MouseClick += OnMouseClick;
+        _notifyIcon.MouseDoubleClick += OnMouseDoubleClick;
         _notifyIcon.BalloonTipClicked += OnBalloonClicked;
     }
 
@@ -80,6 +86,7 @@ internal sealed class TrayIconManager : IDisposable
     {
         _waitingChildren.Remove(child);
         _lastBalloonShownAt.Remove(child);
+        if (ReferenceEquals(_lastBalloonChild, child)) _lastBalloonChild = null;
         UpdateTooltipAndMenu();
     }
 
@@ -106,6 +113,7 @@ internal sealed class TrayIconManager : IDisposable
             return;
 
         _lastBalloonShownAt[child] = DateTime.UtcNow;
+        _lastBalloonChild = child;
         _notifyIcon.ShowBalloonTip(BalloonTimeoutMs,
             "amm: 入力待ち",
             $"{child.DisplayName} が入力待ちです",
@@ -147,6 +155,17 @@ internal sealed class TrayIconManager : IDisposable
     {
         if (e.Button == MouseButtons.Left)
             BringToForeground(null);
+    }
+
+    private void OnMouseDoubleClick(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left) return;
+        // ダブルクリック直前の 2 回の MouseClick で BringToForeground は既に発火済み。
+        // ここでは通知元の MDI を最大化してフォーカスする。
+        var target = _lastBalloonChild != null && !_lastBalloonChild.IsDisposed
+            ? _lastBalloonChild
+            : _waitingChildren.OrderBy(kv => kv.Value).FirstOrDefault().Key;
+        _activateAndMaximize(target);
     }
 
     private void OnBalloonClicked(object? sender, EventArgs e)

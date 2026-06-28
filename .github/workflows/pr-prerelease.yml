@@ -1,12 +1,21 @@
 name: PR Prerelease
 
 on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
         description: 'PR number to build prerelease for'
         required: true
         type: string
+
+# 同じ PR の古いビルドを自動キャンセルして Windows runner 分を節約する。
+# workflow_dispatch は手動なのでキャンセルしない (pr_number でグループ化)。
+concurrency:
+  group: pr-prerelease-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -15,6 +24,7 @@ permissions:
 jobs:
   prerelease:
     runs-on: windows-latest
+    if: github.event.pull_request.draft == false
 
     steps:
       - uses: actions/checkout@v7
@@ -35,6 +45,17 @@ jobs:
       - name: Publish binaries
         run: tools\publish.cmd
 
+      - name: Resolve PR number
+        id: pr
+        shell: pwsh
+        run: |
+          $n = if ("${{ github.event_name }}" -eq "pull_request") {
+            "${{ github.event.pull_request.number }}"
+          } else {
+            "${{ github.event.inputs.pr_number }}"
+          }
+          "number=$n" >> $env:GITHUB_OUTPUT
+
       - name: Determine version
         id: ver
         shell: pwsh
@@ -42,11 +63,11 @@ jobs:
           $base = (Select-Xml -Path Directory.Build.props -XPath '//Version').Node.InnerText
           $parts = $base.Split('.')
           while ($parts.Count -lt 4) { $parts += '0' }
-          $semver  = "$($parts[0]).$($parts[1]).$($parts[2])-pr${{ github.event.inputs.pr_number }}"
           $fourpart = "$($parts[0]).$($parts[1]).$($parts[2]).$($parts[3])"
-          "semver=$semver"     >> $env:GITHUB_OUTPUT
+          $prver    = "$fourpart-pr${{ steps.pr.outputs.number }}"
           "fourpart=$fourpart" >> $env:GITHUB_OUTPUT
-          "tag=v$semver"       >> $env:GITHUB_OUTPUT
+          "prver=$prver"       >> $env:GITHUB_OUTPUT
+          "tag=v$prver"        >> $env:GITHUB_OUTPUT
 
       - name: Build MSI
         run: >
@@ -54,11 +75,17 @@ jobs:
           -c Release
           -p:ProductVersion=${{ steps.ver.outputs.fourpart }}
 
+      - name: Rename MSI for prerelease
+        shell: pwsh
+        run: |
+          Rename-Item "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.msi" `
+                      "amm-setup-${{ steps.ver.outputs.prver }}.msi"
+
       - name: Zip MSI
         shell: pwsh
         run: |
-          $msi = "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.msi"
-          $zip = "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.zip"
+          $msi = "artifacts\packages\amm-setup-${{ steps.ver.outputs.prver }}.msi"
+          $zip = "artifacts\packages\amm-setup-${{ steps.ver.outputs.prver }}.zip"
           Compress-Archive -Path $msi -DestinationPath $zip
 
       - name: Delete existing prerelease for this PR
@@ -77,16 +104,16 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: amm ${{ steps.ver.outputs.semver }} (PR #${{ github.event.inputs.pr_number }})
+          name: amm ${{ steps.ver.outputs.prver }} (PR #${{ steps.pr.outputs.number }})
           prerelease: true
           draft: false
           body: |
-            PR #${{ github.event.inputs.pr_number }} のテスト用プレリリースビルドです。
+            PR #${{ steps.pr.outputs.number }} のテスト用プレリリースビルドです。
             正式リリースではありません。
 
             **コミット:** ${{ github.sha }}
           files: |
-            artifacts/packages/amm-setup-${{ steps.ver.outputs.fourpart }}.msi
-            artifacts/packages/amm-setup-${{ steps.ver.outputs.fourpart }}.zip
+            artifacts/packages/amm-setup-${{ steps.ver.outputs.prver }}.msi
+            artifacts/packages/amm-setup-${{ steps.ver.outputs.prver }}.zip
             artifacts/publish/amm.exe
             artifacts/publish/amm-mcp.exe
