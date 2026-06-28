@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using Amm.Core;
@@ -83,6 +84,7 @@ public partial class TerminalChildForm : Form
     /// チャット記録の有効/無効をランタイムでトグルする。プロファイル値を初期値とし、
     /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
     /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool ChatRecordEnabled
     {
         get => _chatRecordEnabled;
