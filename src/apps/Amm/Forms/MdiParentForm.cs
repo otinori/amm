@@ -2978,6 +2978,9 @@ public partial class MdiParentForm : Form, IMcpHost
     /// </summary>
     private static async Task DispatchSendAsync(TerminalChildForm target, string sendText, bool submit = true)
     {
+        if (target.ChatRecordEnabled)
+            target.StartChatRecording(sendText);
+
         if (target.Profile.UseBracketedPaste)
         {
             await target.SendAsBracketedPasteAsync(sendText, extraEnter: submit, submit: submit);
@@ -3636,6 +3639,15 @@ public partial class MdiParentForm : Form, IMcpHost
         }) { Enabled = curIdx >= 0 && curIdx < _childOrder.Count - 1 };
         menu.Items.Add(moveUpItem);
         menu.Items.Add(moveDownItem);
+
+        // チャット記録トグル: profiles.amm の初期値を引き継ぎ、実行時に ON/OFF 可能。
+        var recItem = new ToolStripMenuItem("チャット記録(&C)")
+        {
+            CheckOnClick = true,
+            Checked      = target.ChatRecordEnabled,
+        };
+        recItem.CheckedChanged += (_, _) => target.ChatRecordEnabled = recItem.Checked;
+        menu.Items.Add(recItem);
 
         return menu;
     }

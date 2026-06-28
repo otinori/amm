@@ -24,6 +24,9 @@ public partial class TerminalChildForm : Form
     private readonly object _sessionLogLock = new();
     private bool _navigationCompleted;
     private bool _terminalReady;
+    // チャット記録: プロファイル設定を起点とし、実行時にトグル可能。
+    private bool _chatRecordEnabled;
+    private ChatRecorder? _activeRecorder;
     private NativeDropTarget? _nativeDropTarget;
     private readonly List<IntPtr> _dropTargetHwnds = new();
     // xterm.js が fitAddon で算出した実サイズ (ready 時に送られてくる)。
@@ -75,6 +78,31 @@ public partial class TerminalChildForm : Form
     /// <summary>この子に紐付く SessionProfile。送信前処理 (collapseBlankLines /
     /// commentPrefixes) や closeProhibited 判定のために親フォームから参照する。</summary>
     public SessionProfile Profile => _profile;
+
+    /// <summary>
+    /// チャット記録の有効/無効をランタイムでトグルする。プロファイル値を初期値とし、
+    /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
+    /// </summary>
+    public bool ChatRecordEnabled
+    {
+        get => _chatRecordEnabled;
+        set => _chatRecordEnabled = value;
+    }
+
+    /// <summary>
+    /// コマンド送信時に呼ぶ。前回の記録が未完了なら先に完了させてから新規開始する。
+    /// </summary>
+    public void StartChatRecording(string command)
+    {
+        _activeRecorder?.Complete();
+        var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+            ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : OverrideWorkingDirectory;
+        var saveDir = Path.Combine(workDir, ".amm");
+        _activeRecorder = new ChatRecorder(
+            saveDir, _profile.ChatRecordTailChars,
+            _profile.Name, DisplayName, command);
+    }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
     public int InstanceNumber { get; }
@@ -195,6 +223,7 @@ public partial class TerminalChildForm : Form
     public TerminalChildForm(SessionProfile profile, int instanceNumber = 1)
     {
         _profile = profile;
+        _chatRecordEnabled = profile.ChatRecord;
         InstanceNumber = instanceNumber;
         Text = FormatTitle(WaitStateGlyph.For(WaitState.Running));
         Size = new Size(800, 500);
@@ -617,6 +646,7 @@ public partial class TerminalChildForm : Form
     {
         _waitDetector?.Feed(ansiData);
         WriteSessionLog(ansiData);
+        _activeRecorder?.Feed(ansiData);
 
         if (_navigationCompleted && !IsDisposed)
         {
@@ -637,6 +667,9 @@ public partial class TerminalChildForm : Form
     private void OnProcessExited()
     {
         _waitDetector?.NotifyProcessExited();
+        // プロセス終了時も進行中の記録を書き出す
+        var rec = Interlocked.Exchange(ref _activeRecorder, null);
+        rec?.Complete();
         try
         {
             BeginInvoke(() =>
@@ -670,6 +703,12 @@ public partial class TerminalChildForm : Form
                 ApplyTitleBarTint(state);
                 WaitStateChanged?.Invoke(this, state);
                 UpdateAutoSendTimer(prev, state);
+                // WaitingForInput (= 応答完了) で記録を書き出す
+                if (state == WaitState.WaitingForInput && _activeRecorder != null)
+                {
+                    _activeRecorder.Complete();
+                    _activeRecorder = null;
+                }
             });
         }
         catch { }

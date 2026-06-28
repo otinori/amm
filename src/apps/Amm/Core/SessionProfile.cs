@@ -211,6 +211,19 @@ public sealed class SessionProfile
     public bool SessionLog { get; set; } = false;
 
     /// <summary>
+    /// true の場合、送信コマンドと応答末尾を JSON ファイルとして記録する。
+    /// 保存先: &lt;workingDirectory&gt;\.amm\&lt;timestamp&gt;-&lt;rand&gt;.json
+    /// </summary>
+    [JsonPropertyName("chatRecord")]
+    public bool ChatRecord { get; set; } = false;
+
+    /// <summary>
+    /// チャット記録に残す応答テキストの末尾文字数。既定 2000 文字。
+    /// </summary>
+    [JsonPropertyName("chatRecordTailChars")]
+    public int ChatRecordTailChars { get; set; } = 2000;
+
+    /// <summary>
     /// xterm.js の theme オプションへそのまま渡すキー/値。
     /// 例: {"background": "#000", "foreground": "#0f0", "cursor": "#ff0"}
     /// 省略時は terminal.html の既定 (#1e1e1e / #d4d4d4) を使用。
