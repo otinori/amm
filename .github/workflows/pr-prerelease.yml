@@ -63,11 +63,11 @@ jobs:
           $base = (Select-Xml -Path Directory.Build.props -XPath '//Version').Node.InnerText
           $parts = $base.Split('.')
           while ($parts.Count -lt 4) { $parts += '0' }
-          $semver  = "$($parts[0]).$($parts[1]).$($parts[2])-pr${{ steps.pr.outputs.number }}"
           $fourpart = "$($parts[0]).$($parts[1]).$($parts[2]).$($parts[3])"
-          "semver=$semver"     >> $env:GITHUB_OUTPUT
+          $prver    = "$fourpart-pr${{ steps.pr.outputs.number }}"
           "fourpart=$fourpart" >> $env:GITHUB_OUTPUT
-          "tag=v$semver"       >> $env:GITHUB_OUTPUT
+          "prver=$prver"       >> $env:GITHUB_OUTPUT
+          "tag=v$prver"        >> $env:GITHUB_OUTPUT
 
       - name: Build MSI
         run: >
@@ -75,11 +75,17 @@ jobs:
           -c Release
           -p:ProductVersion=${{ steps.ver.outputs.fourpart }}
 
+      - name: Rename MSI for prerelease
+        shell: pwsh
+        run: |
+          Rename-Item "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.msi" `
+                      "amm-setup-${{ steps.ver.outputs.prver }}.msi"
+
       - name: Zip MSI
         shell: pwsh
         run: |
-          $msi = "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.msi"
-          $zip = "artifacts\packages\amm-setup-${{ steps.ver.outputs.fourpart }}.zip"
+          $msi = "artifacts\packages\amm-setup-${{ steps.ver.outputs.prver }}.msi"
+          $zip = "artifacts\packages\amm-setup-${{ steps.ver.outputs.prver }}.zip"
           Compress-Archive -Path $msi -DestinationPath $zip
 
       - name: Delete existing prerelease for this PR
@@ -98,7 +104,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: amm ${{ steps.ver.outputs.semver }} (PR #${{ steps.pr.outputs.number }})
+          name: amm ${{ steps.ver.outputs.prver }} (PR #${{ steps.pr.outputs.number }})
           prerelease: true
           draft: false
           body: |
@@ -107,7 +113,7 @@ jobs:
 
             **コミット:** ${{ github.sha }}
           files: |
-            artifacts/packages/amm-setup-${{ steps.ver.outputs.fourpart }}.msi
-            artifacts/packages/amm-setup-${{ steps.ver.outputs.fourpart }}.zip
+            artifacts/packages/amm-setup-${{ steps.ver.outputs.prver }}.msi
+            artifacts/packages/amm-setup-${{ steps.ver.outputs.prver }}.zip
             artifacts/publish/amm.exe
             artifacts/publish/amm-mcp.exe
