@@ -50,6 +50,8 @@ public sealed class CommandTemplateDialog : Form
     private readonly CheckBox _autoSendEnabled;
     private readonly TextBox _autoSendPrompt;
     private readonly NumericUpDown _autoSendDelaySeconds;
+    private readonly CheckBox _chatRecord;
+    private readonly NumericUpDown _chatRecordTailChars;
 
     /// <summary>OK 押下時に組み立てた SessionProfile (Cancel ならアクセス不可)。</summary>
     public SessionProfile Result { get; private set; } = new();
@@ -283,6 +285,34 @@ public sealed class CommandTemplateDialog : Form
         };
         AddRow(layout, "遅延時間（秒、0=即時）", _autoSendDelaySeconds);
 
+        // ---- チャット記録 ----
+        var chatRecordSection = new Label
+        {
+            Text = "── チャット記録 ──",
+            AutoSize = true,
+            ForeColor = SystemColors.GrayText,
+            Margin = new Padding(0, 8, 0, 4),
+        };
+        layout.Controls.Add(chatRecordSection);
+        layout.SetColumnSpan(chatRecordSection, 2);
+
+        _chatRecord = new CheckBox
+        {
+            Text = "コマンド送信と応答末尾を .amm フォルダに JSON 記録する",
+            AutoSize = true,
+            Checked = initialProfile.ChatRecord,
+        };
+        AddRow(layout, "", _chatRecord);
+
+        _chatRecordTailChars = new NumericUpDown
+        {
+            Minimum = 100,
+            Maximum = 100000,
+            Value = Math.Clamp(initialProfile.ChatRecordTailChars, 100, 100000),
+            Width = 100,
+        };
+        AddRow(layout, "記録末尾文字数", _chatRecordTailChars);
+
         var hint = new Label
         {
             Text = "※ Theme / InitialCommands / SessionLog / CtrlCCopyOnSelection / CloseOnExit は\n" +
@@ -466,6 +496,8 @@ public sealed class CommandTemplateDialog : Form
                 Prompt = _autoSendPrompt.Text,
                 DelayMs = (int)_autoSendDelaySeconds.Value * 1000,
             },
+            ChatRecord = _chatRecord.Checked,
+            ChatRecordTailChars = (int)_chatRecordTailChars.Value,
         };
     }
 
