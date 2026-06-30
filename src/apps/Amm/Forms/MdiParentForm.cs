@@ -3143,6 +3143,9 @@ public partial class MdiParentForm : Form, IMcpHost
                 };
                 btn.FlatAppearance.BorderColor = Color.FromArgb(160, 160, 160);
                 btn.FlatAppearance.BorderSize = 1;
+                // クリックでフォーカスが当たるため、入力欄と同じ Ctrl+S 等の送信
+                // ショートカットをここでも有効にする (OnInputBoxKeyDown を共用)。
+                btn.KeyDown += OnInputBoxKeyDown;
                 // 色優先順位:
                 //   最小化         → グレー背景 (最小化中を一目で識別)
                 //   許可・確認待ち → オレンジ背景 (attention、最優先で気付かせる)
