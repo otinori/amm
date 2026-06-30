@@ -38,6 +38,17 @@ public partial class TerminalChildForm : Form
     // ConPTY 読みスレッドの OnConPtyOutput が同時に初回 Arm を試みた場合に競合しうる)。
     private readonly System.Threading.Timer _chatRecordIdleTimer;
     private const int ChatRecordQuietMs = 1200;
+    // 統計情報 (指示回数 / AI 動作時間 / 人間の応答時間): チャット記録とは独立した
+    // スイッチ・独立した完了判定タイマ。応答本文は保持しないため ChatRecorder
+    // (バッファ保持/JSON 整形) を再利用せず、タイムスタンプのみで完結させる。
+    private bool _statsEnabled;
+    // 計測中の交換の送信時刻 (UTC)。null = 計測中の交換なし。
+    private DateTime? _statsPendingSentAtUtc;
+    // 直前に完了した交換の応答完了時刻 (UTC)。次の送信までの間隔を「人間の応答時間」
+    // として計測するために保持する。amm 再起動で失われる (セッション非永続化と同様)。
+    private DateTime? _statsLastRespondedAtUtc;
+    private readonly System.Threading.Timer _statsIdleTimer;
+    private const int StatsQuietMs = 1200;
     private NativeDropTarget? _nativeDropTarget;
     private readonly List<IntPtr> _dropTargetHwnds = new();
     // xterm.js が fitAddon で算出した実サイズ (ready 時に送られてくる)。
@@ -155,6 +166,74 @@ public partial class TerminalChildForm : Form
             });
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 統計情報の収集をランタイムでトグルする。プロファイル値を初期値とし、
+    /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
+    /// チャット記録 (ChatRecordEnabled) とは独立しており、片方だけ ON でも動作する。
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool StatsEnabled
+    {
+        get => _statsEnabled;
+        set => _statsEnabled = value;
+    }
+
+    /// <summary>
+    /// コマンド送信時に呼ぶ。前回の計測が未完了なら先に確定させてから新規開始する。
+    /// </summary>
+    public void StartStatsTracking()
+    {
+        FlushStatsIfPending();
+        _statsPendingSentAtUtc = DateTime.UtcNow;
+        ArmStatsIdleTimer();
+    }
+
+    private void ArmStatsIdleTimer()
+    {
+        _statsIdleTimer.Change(StatsQuietMs, Timeout.Infinite);
+    }
+
+    /// <summary>タイマコールバック (スレッドプール) から呼ばれる。ファイル I/O を
+    /// 伴うため BeginInvoke 経由で UI スレッドへ戻す。</summary>
+    private void CompleteStatsIfIdle()
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed) return;
+                FlushStatsIfPending();
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>計測中の交換があれば確定し、ChatStatsStore へ加算する。UI スレッドから呼ぶこと。</summary>
+    private void FlushStatsIfPending()
+    {
+        if (_statsPendingSentAtUtc is not DateTime sentAtUtc) return;
+        _statsPendingSentAtUtc = null;
+
+        var respondedAtUtc = DateTime.UtcNow;
+        long aiMs = (long)(respondedAtUtc - sentAtUtc).TotalMilliseconds;
+        long? humanMs = _statsLastRespondedAtUtc is DateTime lastUtc
+            ? (long)(sentAtUtc - lastUtc).TotalMilliseconds
+            : null;
+        _statsLastRespondedAtUtc = respondedAtUtc;
+
+        try
+        {
+            var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+                ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+                : OverrideWorkingDirectory;
+            ChatStatsStore.RecordExchange(workDir, _profile.Name, DisplayName, sentAtUtc, aiMs, humanMs);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("ChatStatsStore.RecordExchange failed", ex);
+        }
     }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
@@ -278,6 +357,9 @@ public partial class TerminalChildForm : Form
         _profile = profile;
         _chatRecordEnabled = profile.ChatRecord;
         _chatRecordIdleTimer = new System.Threading.Timer(_ => CompleteChatRecordingIfIdle(),
+            null, Timeout.Infinite, Timeout.Infinite);
+        _statsEnabled = profile.Stats;
+        _statsIdleTimer = new System.Threading.Timer(_ => CompleteStatsIfIdle(),
             null, Timeout.Infinite, Timeout.Infinite);
         InstanceNumber = instanceNumber;
         Text = FormatTitle(WaitStateGlyph.For(WaitState.Running));
@@ -707,6 +789,8 @@ public partial class TerminalChildForm : Form
             // 出力が続く限り完了判定を先送りする (応答ストリーミング中の早期 Complete を防ぐ)。
             ArmChatRecordIdleTimer();
         }
+        if (_statsPendingSentAtUtc != null)
+            ArmStatsIdleTimer();
 
         if (_navigationCompleted && !IsDisposed)
         {
@@ -731,6 +815,8 @@ public partial class TerminalChildForm : Form
         _chatRecordIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
         var rec = Interlocked.Exchange(ref _activeRecorder, null);
         rec?.Complete();
+        _statsIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        FlushStatsIfPending();
         try
         {
             BeginInvoke(() =>
@@ -1765,6 +1851,7 @@ public partial class TerminalChildForm : Form
         _conPty?.Dispose();
         _waitDetector?.Dispose();
         _chatRecordIdleTimer.Dispose();
+        _statsIdleTimer.Dispose();
         CloseSessionLog();
         UnregisterNativeDropTargets();
     }

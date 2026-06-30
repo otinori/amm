@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Amm.Core;
 using Amm.Core.Git;
 using Amm.Core.Mcp;
@@ -2885,7 +2886,10 @@ public partial class MdiParentForm : Form, IMcpHost
     private void ShowAboutDialog()
     {
         var asm = typeof(MdiParentForm).Assembly;
-        var version = asm.GetName().Version?.ToString() ?? "?";
+        // AssemblyVersion (GetName().Version) は数値のみでプレリリース接尾辞 (-prNN 等) を
+        // 保持できないため、CI が Version プロパティ経由で設定する InformationalVersion を使う。
+        var version = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? asm.GetName().Version?.ToString() ?? "?";
         var title = "amm について";
         var body =
             $"amm\n" +
@@ -3038,6 +3042,8 @@ public partial class MdiParentForm : Form, IMcpHost
     {
         if (target.ChatRecordEnabled)
             target.StartChatRecording(sendText);
+        if (target.StatsEnabled)
+            target.StartStatsTracking();
 
         if (target.Profile.UseBracketedPaste)
         {
@@ -3707,7 +3713,36 @@ public partial class MdiParentForm : Form, IMcpHost
         recItem.CheckedChanged += (_, _) => target.ChatRecordEnabled = recItem.Checked;
         menu.Items.Add(recItem);
 
+        // 統計情報トグル: チャット記録とは独立したスイッチ。
+        var statsItem = new ToolStripMenuItem("統計情報(&T)")
+        {
+            CheckOnClick = true,
+            Checked      = target.StatsEnabled,
+        };
+        statsItem.CheckedChanged += (_, _) => target.StatsEnabled = statsItem.Checked;
+        menu.Items.Add(statsItem);
+
+        menu.Items.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
+        {
+            if (target.IsDisposed) return;
+            ShowChatStatsDialog(target);
+        }));
+
         return menu;
+    }
+
+    /// <summary>
+    /// 指定 MDI の作業ディレクトリ配下の統計情報 (&lt;workDir&gt;\.amm\stats\&lt;yyyyMMdd&gt;\)
+    /// をダイアログで一覧表示する。日付は変更可能、同じ作業ディレクトリを共有する他の
+    /// MDI の集計も合わせて表示する。
+    /// </summary>
+    private static void ShowChatStatsDialog(TerminalChildForm target)
+    {
+        var workDir = string.IsNullOrEmpty(target.OverrideWorkingDirectory)
+            ? (target.Profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : target.OverrideWorkingDirectory;
+        using var dlg = new ChatStatsDialog(workDir);
+        dlg.ShowDialog();
     }
 
     /// <summary>

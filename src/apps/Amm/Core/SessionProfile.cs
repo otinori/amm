@@ -225,6 +225,15 @@ public sealed class SessionProfile
     public int ChatRecordTailChars { get; set; } = 2000;
 
     /// <summary>
+    /// true の場合、コマンド送信ごとに統計情報 (指示回数 / AI 動作時間 /
+    /// 人間の応答時間) を MDI・日付単位で集計し JSON ファイルに記録する。
+    /// チャット記録 (ChatRecord) とは独立したスイッチ。
+    /// 保存先: &lt;workingDirectory&gt;\.amm\stats\&lt;yyyyMMdd&gt;\&lt;mdi名&gt;.json
+    /// </summary>
+    [JsonPropertyName("stats")]
+    public bool Stats { get; set; } = false;
+
+    /// <summary>
     /// xterm.js の theme オプションへそのまま渡すキー/値。
     /// 例: {"background": "#000", "foreground": "#0f0", "cursor": "#ff0"}
     /// 省略時は terminal.html の既定 (#1e1e1e / #d4d4d4) を使用。
