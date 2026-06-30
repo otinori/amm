@@ -28,6 +28,16 @@ public partial class TerminalChildForm : Form
     // チャット記録: プロファイル設定を起点とし、実行時にトグル可能。
     private bool _chatRecordEnabled;
     private ChatRecorder? _activeRecorder;
+    // チャット記録の完了判定用デバウンスタイマ。Claude Code / Codex 等の box UI は
+    // 処理中も入力欄を表示し続けるため WaitState の遷移だけでは「応答完了」を
+    // 判定できない (即座に WaitingForInput と一致してしまい応答本文を捉える前に
+    // Complete() してしまう)。出力が ChatRecordQuietMs の間途絶えたことを以て
+    // 「応答完了」とみなす。ConPTY 読みスレッドから Change() されるため
+    // System.Threading.Timer (スレッドセーフ) を使う。
+    // コンストラクタで即時生成 (遅延初期化だと UI スレッドの StartChatRecording と
+    // ConPTY 読みスレッドの OnConPtyOutput が同時に初回 Arm を試みた場合に競合しうる)。
+    private readonly System.Threading.Timer _chatRecordIdleTimer;
+    private const int ChatRecordQuietMs = 1200;
     private NativeDropTarget? _nativeDropTarget;
     private readonly List<IntPtr> _dropTargetHwnds = new();
     // xterm.js が fitAddon で算出した実サイズ (ready 時に送られてくる)。
@@ -81,6 +91,14 @@ public partial class TerminalChildForm : Form
     public SessionProfile Profile => _profile;
 
     /// <summary>
+    /// 「入力欄をMDIごとに保持」モード時の下書きテキスト。MdiParentForm が
+    /// MDI 切替のたびに _inputBox との間で同期する。amm を再起動すると失われる
+    /// (セッション自体が永続化されないのと同様)。
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string DraftInputText { get; set; } = "";
+
+    /// <summary>
     /// チャット記録の有効/無効をランタイムでトグルする。プロファイル値を初期値とし、
     /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
     /// </summary>
@@ -104,14 +122,39 @@ public partial class TerminalChildForm : Form
         _activeRecorder = new ChatRecorder(
             saveDir, _profile.ChatRecordTailChars,
             _profile.Name, DisplayName, command);
+        ArmChatRecordIdleTimer();
 
-        // Claude Code / Codex 等は処理中も box プロンプトを表示し続けるため、
-        // 直前の状態が既に WaitingForInput だと Feed() の SetState が
-        // no-op になり (状態不変)、応答完了時の WaitingForInput 遷移も
-        // 検出されず本コマンドの Complete() が一生呼ばれない。送信のたびに
-        // 強制的に Running へ落としておき、応答完了の自然遷移
-        // (Running → WaitingForInput) を毎回確実に発生させる。
+        // タイトルバー等の表示を即座に「実行中」に戻すための UI 用状態遷移。
+        // チャット記録の完了判定自体は ArmChatRecordIdleTimer (出力静穏タイマ) で
+        // 行うため、ここでの遷移はチャット記録の完了タイミングには影響しない。
         _waitDetector?.ForceState(WaitState.Running);
+    }
+
+    /// <summary>
+    /// チャット記録の応答完了判定用デバウンスタイマを (再) 起動する。ConPTY 読み
+    /// スレッドから呼ばれるため Change() がスレッドセーフな System.Threading.Timer
+    /// を使う。ChatRecordQuietMs の間 Feed が来なければ「応答完了」とみなして
+    /// CompleteChatRecordingIfIdle を呼ぶ。
+    /// </summary>
+    private void ArmChatRecordIdleTimer()
+    {
+        _chatRecordIdleTimer.Change(ChatRecordQuietMs, Timeout.Infinite);
+    }
+
+    /// <summary>タイマコールバック (スレッドプール) から呼ばれる。Complete() は
+    /// UI スレッド契約のため BeginInvoke 経由で実行する。</summary>
+    private void CompleteChatRecordingIfIdle()
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed) return;
+                var rec = Interlocked.Exchange(ref _activeRecorder, null);
+                rec?.Complete();
+            });
+        }
+        catch { }
     }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
@@ -234,6 +277,8 @@ public partial class TerminalChildForm : Form
     {
         _profile = profile;
         _chatRecordEnabled = profile.ChatRecord;
+        _chatRecordIdleTimer = new System.Threading.Timer(_ => CompleteChatRecordingIfIdle(),
+            null, Timeout.Infinite, Timeout.Infinite);
         InstanceNumber = instanceNumber;
         Text = FormatTitle(WaitStateGlyph.For(WaitState.Running));
         Size = new Size(800, 500);
@@ -656,7 +701,12 @@ public partial class TerminalChildForm : Form
     {
         _waitDetector?.Feed(ansiData);
         WriteSessionLog(ansiData);
-        _activeRecorder?.Feed(ansiData);
+        if (_activeRecorder != null)
+        {
+            _activeRecorder.Feed(ansiData);
+            // 出力が続く限り完了判定を先送りする (応答ストリーミング中の早期 Complete を防ぐ)。
+            ArmChatRecordIdleTimer();
+        }
 
         if (_navigationCompleted && !IsDisposed)
         {
@@ -678,6 +728,7 @@ public partial class TerminalChildForm : Form
     {
         _waitDetector?.NotifyProcessExited();
         // プロセス終了時も進行中の記録を書き出す
+        _chatRecordIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
         var rec = Interlocked.Exchange(ref _activeRecorder, null);
         rec?.Complete();
         try
@@ -713,12 +764,10 @@ public partial class TerminalChildForm : Form
                 ApplyTitleBarTint(state);
                 WaitStateChanged?.Invoke(this, state);
                 UpdateAutoSendTimer(prev, state);
-                // WaitingForInput (= 応答完了) で記録を書き出す
-                if (state == WaitState.WaitingForInput && _activeRecorder != null)
-                {
-                    _activeRecorder.Complete();
-                    _activeRecorder = null;
-                }
+                // チャット記録の完了は ArmChatRecordIdleTimer (出力静穏タイマ) で判定する。
+                // box UI 系 CLI は処理中も入力欄が WaitingForInput と一致してしまうため、
+                // ここで即座に Complete() すると応答本文を捉える前に記録してしまう
+                // (UDR 修正: やりとり一つしか記録できない/応答が空になる不具合)。
             });
         }
         catch { }
@@ -1715,6 +1764,7 @@ public partial class TerminalChildForm : Form
         // 落ちる窓があった。
         _conPty?.Dispose();
         _waitDetector?.Dispose();
+        _chatRecordIdleTimer.Dispose();
         CloseSessionLog();
         UnregisterNativeDropTargets();
     }

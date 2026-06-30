@@ -30,6 +30,14 @@ public partial class MdiParentForm : Form, IMcpHost
     // 入力欄からの送信に確定改行 (Enter) を同梱するか。OFF = テキストだけ届け、
     // 確定はターミナル側で人間が行う (誤 MDI 送信対策)。layout.json に永続化される。
     private ToolStripMenuItem _sendSubmitEnterMenuItem = null!;
+    // ON = MDI 切替のたびに入力欄の内容を MDI ごとに保存/復元する (下書きを
+    // 子ウィンドウ単位で持つ)。OFF (既定) = 従来どおり入力欄は MDI 間で共有。
+    // モード自体 (ON/OFF) は layout.json に永続化されるが、各 MDI の下書き本文
+    // 自体はセッション (TerminalChildForm) と同様プロセス内のみで amm 終了時に失われる。
+    private ToolStripMenuItem _perMdiInputDraftMenuItem = null!;
+    // _perMdiInputDraftMenuItem が ON のとき、直前にアクティブだった MDI 子。
+    // 次のアクティブ化までに入力欄の内容をこの子の DraftInputText へ退避する。
+    private TerminalChildForm? _inputDraftActiveChild;
     // エディタ連携でファイル保存 → 送信した直後の動作を 3 択で選ぶ排他メニュー。
     // "Focus" = 対象 MDI をアクティブ化 / "Maximize" = アクティブ化 + 最大化 /
     // "None" = 何もしない。値は layout.json に永続化される。
@@ -772,6 +780,8 @@ public partial class MdiParentForm : Form, IMcpHost
         // 入力欄からの送信に確定改行 (Enter) を同梱するか。false = テキストのみ
         // 送り、確定はターミナル側で人間が行う
         public bool SendSubmitEnter { get; set; } = true;
+        // 入力欄を MDI ごとに保持するか (既定 OFF = 従来どおり共有)
+        public bool PerMdiInputDraft { get; set; } = false;
         public bool ShowButtonBar { get; set; } = true;
         public bool ShowInputBox { get; set; } = true;
         public bool ShowStatusBar { get; set; } = true;
@@ -837,6 +847,7 @@ public partial class MdiParentForm : Form, IMcpHost
             _commentFilterMenuItem.Checked = state.CommentFilter;
             _ctrlSSendMenuItem.Checked = state.CtrlSSendEnabled;
             _sendSubmitEnterMenuItem.Checked = state.SendSubmitEnter;
+            _perMdiInputDraftMenuItem.Checked = state.PerMdiInputDraft;
             _showButtonBarMenuItem.Checked = state.ShowButtonBar;
             _showInputBoxMenuItem.Checked = state.ShowInputBox;
             _showStatusBarMenuItem.Checked = state.ShowStatusBar;
@@ -919,6 +930,7 @@ public partial class MdiParentForm : Form, IMcpHost
                 CommentFilter = _commentFilterMenuItem.Checked,
                 CtrlSSendEnabled = _ctrlSSendMenuItem.Checked,
                 SendSubmitEnter = _sendSubmitEnterMenuItem.Checked,
+                PerMdiInputDraft = _perMdiInputDraftMenuItem.Checked,
                 ShowButtonBar = _showButtonBarMenuItem.Checked,
                 ShowInputBox = _showInputBoxMenuItem.Checked,
                 ShowStatusBar = _showStatusBarMenuItem.Checked,
@@ -1166,6 +1178,25 @@ public partial class MdiParentForm : Form, IMcpHost
                           "ターミナル側で手動で行います (誤った MDI への送信防止)。",
         };
         sendMenu.DropDownItems.Add(_sendSubmitEnterMenuItem);
+
+        _perMdiInputDraftMenuItem = new ToolStripMenuItem("入力欄をMDIごとに保持(&D)")
+        {
+            CheckOnClick = true,
+            Checked = false,
+            ToolTipText = "ON にすると MDI を切り替えるたびに入力欄の内容を MDI ごとに\n" +
+                          "保存/復元します。OFF (既定) では従来どおり入力欄は MDI 間で共有されます。\n" +
+                          "このON/OFF設定自体は終了後も保存されますが、各MDIの下書き内容は\n" +
+                          "amm終了時に失われます。",
+        };
+        _perMdiInputDraftMenuItem.CheckedChanged += (_, _) =>
+        {
+            // ON にした瞬間: 現在の入力欄内容を「現在アクティブな子の下書き」として
+            // 紐付け直す (OFF だった間の共有テキストを最初の切替で失わないように)。
+            _inputDraftActiveChild = ActiveMdiChild as TerminalChildForm;
+            if (_perMdiInputDraftMenuItem.Checked && _inputDraftActiveChild != null)
+                _inputDraftActiveChild.DraftInputText = _inputBox.Text;
+        };
+        sendMenu.DropDownItems.Add(_perMdiInputDraftMenuItem);
         sendMenu.DropDownItems.Add(new ToolStripSeparator());
 
         _clearAfterSendMenuItem = new ToolStripMenuItem("送信後に入力欄をクリア(&L)")
@@ -1552,6 +1583,7 @@ public partial class MdiParentForm : Form, IMcpHost
         child.Activated += (_, _) =>
         {
             _lastActiveTerminal = child;
+            ApplyInputDraftSwitch(child);
             UpdateSendTarget();
         };
         child.AmmSettingsRequested += OnAmmSettingsRequested;
@@ -1749,6 +1781,8 @@ public partial class MdiParentForm : Form, IMcpHost
 
     private void OnMdiChildActivate(object? sender, EventArgs e)
     {
+        ApplyInputDraftSwitch();
+
         if (ActiveMdiChild is TerminalChildForm activated)
             _lastActiveTerminal = activated;
         RefreshMdiButtonBar();
@@ -1758,6 +1792,28 @@ public partial class MdiParentForm : Form, IMcpHost
         // 決定なしで解放し、ペイン内プロンプトを表示させる (Approval Hub Level 2)。
         if (ActiveMdiChild is TerminalChildForm active && _approvalBroker != null)
             _approvalBroker.ReleaseByToken(active.NotifyToken);
+    }
+
+    /// <summary>
+    /// 「入力欄をMDIごとに保持」モード時、MDI 切替の前後で入力欄の内容を
+    /// 子ウィンドウごとの DraftInputText と同期する。OFF の間は何もしない
+    /// (= 従来どおり入力欄は共有のまま)。
+    /// WebView2 コンテンツ領域クリックで activation chain が完結せず
+    /// ActiveMdiChild が更新されないケースがあるため (child.Activated の保険と同根)、
+    /// 呼び出し側で確実な対象が分かる場合は <paramref name="next"/> で明示する。
+    /// </summary>
+    private void ApplyInputDraftSwitch(TerminalChildForm? next = null)
+    {
+        if (!_perMdiInputDraftMenuItem.Checked) return;
+        next ??= ActiveMdiChild as TerminalChildForm;
+        if (ReferenceEquals(_inputDraftActiveChild, next)) return;
+
+        if (_inputDraftActiveChild is { IsDisposed: false } prev)
+            prev.DraftInputText = _inputBox.Text;
+
+        _inputDraftActiveChild = next;
+        _inputBox.Text = next?.DraftInputText ?? "";
+        _inputBox.SelectionStart = _inputBox.Text.Length;
     }
 
     private void OnChildWaitStateChanged(TerminalChildForm child, WaitState state)
@@ -1796,6 +1852,8 @@ public partial class MdiParentForm : Form, IMcpHost
             _sessionMap.Remove(closed.SessionId);
             if (ReferenceEquals(_lastActiveTerminal, closed))
                 _lastActiveTerminal = null; // 閉じた子へのフォールバック送信を防ぐ
+            if (ReferenceEquals(_inputDraftActiveChild, closed))
+                _inputDraftActiveChild = null; // 破棄済み子への下書き書き戻しを防ぐ
             // 閉じたペインの許可要求は決定なしで解放 (幽霊要求の防止)
             _approvalBroker?.ReleaseByToken(closed.NotifyToken);
             // WaitBroker: 閉じたセッションの pending wait を timeout 扱いで解放
