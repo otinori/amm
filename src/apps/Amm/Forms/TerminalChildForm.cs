@@ -236,6 +236,19 @@ public partial class TerminalChildForm : Form
         }
     }
 
+    /// <summary>
+    /// この MDI の作業ディレクトリ配下の統計情報 (&lt;workDir&gt;\.amm\stats\&lt;yyyyMMdd&gt;\)
+    /// をダイアログで一覧表示する。MdiParentForm.ShowChatStatsDialog と同等。
+    /// </summary>
+    private void ShowStatsDialog()
+    {
+        var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+            ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : OverrideWorkingDirectory;
+        using var dlg = new ChatStatsDialog(workDir);
+        dlg.ShowDialog(this);
+    }
+
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
     public int InstanceNumber { get; }
 
@@ -1747,6 +1760,34 @@ public partial class TerminalChildForm : Form
             EditorLinkRequested?.Invoke(this);
         }));
         menu.Items.Add(new ToolStripSeparator());
+
+        // チャット記録トグル: MDI 切替バーボタン右クリック (BuildMdiButtonContextMenuStrip)
+        // と同じスイッチをターミナル本体からも到達できるようにする。
+        var recItem = new ToolStripMenuItem("チャット記録(&C)")
+        {
+            CheckOnClick = true,
+            Checked      = ChatRecordEnabled,
+        };
+        recItem.CheckedChanged += (_, _) => ChatRecordEnabled = recItem.Checked;
+        menu.Items.Add(recItem);
+
+        // 統計情報サブメニュー: BuildMdiButtonContextMenuStrip と同じ構成。
+        var statsMenu = new ToolStripMenuItem("統計情報(&T)");
+        var statsItem = new ToolStripMenuItem("統計情報を記録(&E)")
+        {
+            CheckOnClick = true,
+            Checked      = StatsEnabled,
+        };
+        statsItem.CheckedChanged += (_, _) => StatsEnabled = statsItem.Checked;
+        statsMenu.DropDownItems.Add(statsItem);
+        statsMenu.DropDownItems.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
+        {
+            if (IsDisposed) return;
+            ShowStatsDialog();
+        }));
+        menu.Items.Add(statsMenu);
+        menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add(new ToolStripMenuItem("名前変更…", null, (_, _) =>
         {
             if (IsDisposed) return;
