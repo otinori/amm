@@ -72,9 +72,11 @@ internal sealed class ChatRecorder
                 ? _buf.ToString()
                 : _buf.ToString(_buf.Length - _tailChars, _tailChars);
 
-            // ファイル名: yyyyMMddTHHmmss-<4桁16進乱数>.json
+            // ファイル名: <コマンド名(プロファイル名・サニタイズ済み)>-yyyyMMddTHHmmss-<4桁16進乱数>.json
+            // 先頭にコマンド名を置くことで、フォルダ内を見ただけでどのコマンドの
+            // やりとりか判別できるようにする。
             var rand = Convert.ToHexString(Guid.NewGuid().ToByteArray())[..4].ToLowerInvariant();
-            var stem = $"{localSentAt:yyyyMMddTHHmmss}-{rand}";
+            var stem = $"{SanitizeFileNamePart(_profileName)}-{localSentAt:yyyyMMddTHHmmss}-{rand}";
             fileName = stem + ".json";
             var path = Path.Combine(logDir, fileName);
 
@@ -150,6 +152,15 @@ internal sealed class ChatRecorder
     {
         var idx = s.IndexOfAny(['\r', '\n']);
         return idx >= 0 ? s[..idx] : s;
+    }
+
+    private static string SanitizeFileNamePart(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(name.Length);
+        foreach (var c in name)
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+        return sb.Length == 0 ? "_" : sb.ToString();
     }
 }
 

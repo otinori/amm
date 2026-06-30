@@ -212,7 +212,7 @@ public sealed class SessionProfile
 
     /// <summary>
     /// true の場合、送信コマンドと応答末尾を JSON ファイルとして記録する。
-    /// 保存先: &lt;workingDirectory&gt;\.amm\logs\&lt;yyyyMMdd&gt;\&lt;timestamp&gt;-&lt;rand&gt;.json
+    /// 保存先: &lt;workingDirectory&gt;\.amm\logs\&lt;yyyyMMdd&gt;\&lt;コマンド名&gt;-&lt;timestamp&gt;-&lt;rand&gt;.json
     /// 同フォルダに日次の index.json (送信時刻・プロンプト1行目・対応ファイル名の一覧) も書く。
     /// </summary>
     [JsonPropertyName("chatRecord")]
@@ -228,7 +228,7 @@ public sealed class SessionProfile
     /// true の場合、コマンド送信ごとに統計情報 (指示回数 / AI 動作時間 /
     /// 人間の応答時間) を MDI・日付単位で集計し JSON ファイルに記録する。
     /// チャット記録 (ChatRecord) とは独立したスイッチ。
-    /// 保存先: &lt;workingDirectory&gt;\.amm\stats\&lt;yyyyMMdd&gt;\&lt;mdi名&gt;.json
+    /// 保存先: &lt;workingDirectory&gt;\.amm\stats\&lt;yyyyMMdd&gt;\&lt;コマンド名&gt;-&lt;mdi名&gt;.json
     /// </summary>
     [JsonPropertyName("stats")]
     public bool Stats { get; set; } = false;

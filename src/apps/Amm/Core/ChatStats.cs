@@ -36,7 +36,7 @@ internal static class ChatStatsStore
         var localDate = sentAtUtc.ToLocalTime().Date;
         var dir = DirFor(workDir, localDate);
         Directory.CreateDirectory(dir);
-        var path = Path.Combine(dir, FileNameFor(mdiName));
+        var path = Path.Combine(dir, FileNameFor(profileName, mdiName));
 
         var record = Load(path) ?? new ChatStatsRecord
         {
@@ -86,7 +86,12 @@ internal static class ChatStatsStore
         return result;
     }
 
-    private static string FileNameFor(string mdiName) => SanitizeFileName(mdiName) + ".json";
+    // ファイル名先頭にコマンド名 (プロファイル名) を付与し、フォルダ内を見ただけで
+    // どのコマンドの MDI かを判別できるようにする。MDI ごとに 1 ファイルの構造は
+    // 維持する (mdiName は名前変更されると profileName と異なる値になり得るため
+    // 両方を連結してこそ MDI 単位で一意)。
+    private static string FileNameFor(string profileName, string mdiName) =>
+        $"{SanitizeFileName(profileName)}-{SanitizeFileName(mdiName)}.json";
 
     private static string SanitizeFileName(string name)
     {
