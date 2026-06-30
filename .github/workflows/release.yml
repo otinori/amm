@@ -34,9 +34,6 @@ jobs:
       - name: Test
         run: dotnet test Amm.sln -c Release
 
-      - name: Publish binaries
-        run: tools\publish.cmd
-
       - name: Extract version from tag
         id: ver
         shell: pwsh
@@ -51,6 +48,9 @@ jobs:
           while ($parts.Count -lt 4) { $parts += '0' }
           "semver=$raw"                          >> $env:GITHUB_OUTPUT
           "fourpart=$($parts[0..3] -join '.')"   >> $env:GITHUB_OUTPUT
+
+      - name: Publish binaries
+        run: tools\publish.cmd ${{ steps.ver.outputs.semver }}
 
       - name: Build MSI
         run: >

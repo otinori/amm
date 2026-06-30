@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Web.WebView2.WinForms;
 using Amm.Core;
@@ -24,6 +25,39 @@ public partial class TerminalChildForm : Form
     private readonly object _sessionLogLock = new();
     private bool _navigationCompleted;
     private bool _terminalReady;
+    // チャット記録: プロファイル設定を起点とし、実行時にトグル可能。
+    private bool _chatRecordEnabled;
+    private ChatRecorder? _activeRecorder;
+    // チャット記録の完了判定用デバウンスタイマ。Claude Code / Codex 等の box UI は
+    // 処理中も入力欄を表示し続けるため WaitState の遷移だけでは「応答完了」を
+    // 判定できない (即座に WaitingForInput と一致してしまい応答本文を捉える前に
+    // Complete() してしまう)。出力が ChatRecordQuietMs の間途絶えたことを以て
+    // 「応答完了」とみなす。ConPTY 読みスレッドから Change() されるため
+    // System.Threading.Timer (スレッドセーフ) を使う。
+    // コンストラクタで即時生成 (遅延初期化だと UI スレッドの StartChatRecording と
+    // ConPTY 読みスレッドの OnConPtyOutput が同時に初回 Arm を試みた場合に競合しうる)。
+    private readonly System.Threading.Timer _chatRecordIdleTimer;
+    private const int ChatRecordQuietMs = 1200;
+    // 統計情報 (指示回数 / AI 動作時間 / 人間の応答時間): チャット記録とは独立した
+    // スイッチ・独立した完了判定タイマ。応答本文は保持しないため ChatRecorder
+    // (バッファ保持/JSON 整形) を再利用せず、タイムスタンプのみで完結させる。
+    private bool _statsEnabled;
+    // 計測中の交換の送信時刻 (UTC)。null = 計測中の交換なし。
+    private DateTime? _statsPendingSentAtUtc;
+    // 直前に完了した交換の応答完了時刻 (UTC)。次の送信までの間隔を「人間の応答時間」
+    // として計測するために保持する。amm 再起動で失われる (セッション非永続化と同様)。
+    private DateTime? _statsLastRespondedAtUtc;
+    private readonly System.Threading.Timer _statsIdleTimer;
+    private const int StatsQuietMs = 1200;
+    // チャット記録/統計情報は元々「下部入力欄からの送信 (DispatchSendAsync)」だけを
+    // 起点にしていたが、ターミナル画面に直接タイプして Enter を押す使い方では
+    // DispatchSendAsync を一切通らないため記録が一切発火しなかった。これを補うため、
+    // xterm.js から逐次届く生キー入力 (OnWebMessageReceived "input") を行単位で
+    // バッファし、Enter (\r/\n) を「送信」とみなして同じ起点 (StartChatRecording /
+    // StartStatsTracking) を呼ぶ。ANSI エスケープ (矢印キー等) は AnsiStripper で
+    // 大まかに除去するが完全ではないため、command 文字列は best-effort。
+    private readonly System.Text.StringBuilder _typedLineBuf = new();
+    private const int TypedLineBufMaxChars = 20000;
     private NativeDropTarget? _nativeDropTarget;
     private readonly List<IntPtr> _dropTargetHwnds = new();
     // xterm.js が fitAddon で算出した実サイズ (ready 時に送られてくる)。
@@ -75,6 +109,201 @@ public partial class TerminalChildForm : Form
     /// <summary>この子に紐付く SessionProfile。送信前処理 (collapseBlankLines /
     /// commentPrefixes) や closeProhibited 判定のために親フォームから参照する。</summary>
     public SessionProfile Profile => _profile;
+
+    /// <summary>
+    /// 「入力欄をMDIごとに保持」モード時の下書きテキスト。MdiParentForm が
+    /// MDI 切替のたびに _inputBox との間で同期する。amm を再起動すると失われる
+    /// (セッション自体が永続化されないのと同様)。
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string DraftInputText { get; set; } = "";
+
+    /// <summary>
+    /// チャット記録の有効/無効をランタイムでトグルする。プロファイル値を初期値とし、
+    /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ChatRecordEnabled
+    {
+        get => _chatRecordEnabled;
+        set => _chatRecordEnabled = value;
+    }
+
+    /// <summary>
+    /// コマンド送信時に呼ぶ。前回の記録が未完了なら先に完了させてから新規開始する。
+    /// </summary>
+    public void StartChatRecording(string command)
+    {
+        _activeRecorder?.Complete();
+        var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+            ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : OverrideWorkingDirectory;
+        var saveDir = Path.Combine(workDir, ".amm");
+        _activeRecorder = new ChatRecorder(
+            saveDir, _profile.ChatRecordTailChars,
+            _profile.Name, DisplayName, command);
+        ArmChatRecordIdleTimer();
+
+        // タイトルバー等の表示を即座に「実行中」に戻すための UI 用状態遷移。
+        // チャット記録の完了判定自体は ArmChatRecordIdleTimer (出力静穏タイマ) で
+        // 行うため、ここでの遷移はチャット記録の完了タイミングには影響しない。
+        _waitDetector?.ForceState(WaitState.Running);
+    }
+
+    /// <summary>
+    /// チャット記録の応答完了判定用デバウンスタイマを (再) 起動する。ConPTY 読み
+    /// スレッドから呼ばれるため Change() がスレッドセーフな System.Threading.Timer
+    /// を使う。ChatRecordQuietMs の間 Feed が来なければ「応答完了」とみなして
+    /// CompleteChatRecordingIfIdle を呼ぶ。
+    /// </summary>
+    private void ArmChatRecordIdleTimer()
+    {
+        _chatRecordIdleTimer.Change(ChatRecordQuietMs, Timeout.Infinite);
+    }
+
+    /// <summary>タイマコールバック (スレッドプール) から呼ばれる。Complete() は
+    /// UI スレッド契約のため BeginInvoke 経由で実行する。</summary>
+    private void CompleteChatRecordingIfIdle()
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed) return;
+                var rec = Interlocked.Exchange(ref _activeRecorder, null);
+                rec?.Complete();
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 統計情報の収集をランタイムでトグルする。プロファイル値を初期値とし、
+    /// MDI 右クリックメニューで切り替えられる (profiles.amm への永続化は行わない)。
+    /// チャット記録 (ChatRecordEnabled) とは独立しており、片方だけ ON でも動作する。
+    /// </summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool StatsEnabled
+    {
+        get => _statsEnabled;
+        set => _statsEnabled = value;
+    }
+
+    /// <summary>
+    /// コマンド送信時に呼ぶ。前回の計測が未完了なら先に確定させてから新規開始する。
+    /// </summary>
+    public void StartStatsTracking()
+    {
+        FlushStatsIfPending();
+        _statsPendingSentAtUtc = DateTime.UtcNow;
+        ArmStatsIdleTimer();
+    }
+
+    private void ArmStatsIdleTimer()
+    {
+        _statsIdleTimer.Change(StatsQuietMs, Timeout.Infinite);
+    }
+
+    /// <summary>タイマコールバック (スレッドプール) から呼ばれる。ファイル I/O を
+    /// 伴うため BeginInvoke 経由で UI スレッドへ戻す。</summary>
+    private void CompleteStatsIfIdle()
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed) return;
+                FlushStatsIfPending();
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>計測中の交換があれば確定し、ChatStatsStore へ加算する。UI スレッドから呼ぶこと。</summary>
+    private void FlushStatsIfPending()
+    {
+        if (_statsPendingSentAtUtc is not DateTime sentAtUtc) return;
+        _statsPendingSentAtUtc = null;
+
+        var respondedAtUtc = DateTime.UtcNow;
+        long aiMs = (long)(respondedAtUtc - sentAtUtc).TotalMilliseconds;
+        long? humanMs = _statsLastRespondedAtUtc is DateTime lastUtc
+            ? (long)(sentAtUtc - lastUtc).TotalMilliseconds
+            : null;
+        _statsLastRespondedAtUtc = respondedAtUtc;
+
+        try
+        {
+            var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+                ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+                : OverrideWorkingDirectory;
+            ChatStatsStore.RecordExchange(workDir, _profile.Name, DisplayName, sentAtUtc, aiMs, humanMs);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("ChatStatsStore.RecordExchange failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// この MDI の作業ディレクトリ配下の統計情報 (&lt;workDir&gt;\.amm\stats\&lt;yyyyMMdd&gt;\)
+    /// をダイアログで一覧表示する。MdiParentForm.ShowChatStatsDialog と同等。
+    /// </summary>
+    private void ShowStatsDialog()
+    {
+        var workDir = string.IsNullOrEmpty(OverrideWorkingDirectory)
+            ? (_profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : OverrideWorkingDirectory;
+        using var dlg = new ChatStatsDialog(workDir);
+        dlg.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// xterm.js から届く生キー入力 (1 文字ずつ、またはペースト時は複数文字まとめて) を
+    /// 行単位でバッファし、Enter (\r/\n) を「コマンド送信」とみなしてチャット記録/
+    /// 統計情報の起点 (DispatchSendAsync が下部入力欄送信時に呼ぶのと同じ
+    /// StartChatRecording / StartStatsTracking) を呼ぶ。どちらのスイッチも OFF なら
+    /// バッファリング自体を行わない。
+    /// </summary>
+    private void TrackTypedInputForRecording(string data)
+    {
+        if (!ChatRecordEnabled && !StatsEnabled) return;
+
+        // 矢印キー等の ANSI エスケープを大まかに除去 (完全ではない best-effort)。
+        var stripped = AnsiStripper.Strip(data);
+        foreach (var ch in stripped)
+        {
+            switch (ch)
+            {
+                case '\r':
+                case '\n':
+                    {
+                        var line = _typedLineBuf.ToString();
+                        _typedLineBuf.Clear();
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            if (ChatRecordEnabled) StartChatRecording(line);
+                            if (StatsEnabled) StartStatsTracking();
+                        }
+                    }
+                    break;
+
+                case '\x7f': // Backspace (DEL)
+                case '\b':
+                    if (_typedLineBuf.Length > 0) _typedLineBuf.Length--;
+                    break;
+
+                case '\x03': // Ctrl+C: 入力中の行を破棄
+                    _typedLineBuf.Clear();
+                    break;
+
+                default:
+                    if (!char.IsControl(ch) && _typedLineBuf.Length < TypedLineBufMaxChars)
+                        _typedLineBuf.Append(ch);
+                    break;
+            }
+        }
+    }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
     public int InstanceNumber { get; }
@@ -195,6 +424,12 @@ public partial class TerminalChildForm : Form
     public TerminalChildForm(SessionProfile profile, int instanceNumber = 1)
     {
         _profile = profile;
+        _chatRecordEnabled = profile.ChatRecord;
+        _chatRecordIdleTimer = new System.Threading.Timer(_ => CompleteChatRecordingIfIdle(),
+            null, Timeout.Infinite, Timeout.Infinite);
+        _statsEnabled = profile.Stats;
+        _statsIdleTimer = new System.Threading.Timer(_ => CompleteStatsIfIdle(),
+            null, Timeout.Infinite, Timeout.Infinite);
         InstanceNumber = instanceNumber;
         Text = FormatTitle(WaitStateGlyph.For(WaitState.Running));
         Size = new Size(800, 500);
@@ -425,7 +660,10 @@ public partial class TerminalChildForm : Form
                 case "input":
                     var data = root.GetProperty("data").GetString();
                     if (data != null)
+                    {
                         _conPty?.Write(data);
+                        TrackTypedInputForRecording(data);
+                    }
                     break;
 
                 case "resize":
@@ -617,6 +855,14 @@ public partial class TerminalChildForm : Form
     {
         _waitDetector?.Feed(ansiData);
         WriteSessionLog(ansiData);
+        if (_activeRecorder != null)
+        {
+            _activeRecorder.Feed(ansiData);
+            // 出力が続く限り完了判定を先送りする (応答ストリーミング中の早期 Complete を防ぐ)。
+            ArmChatRecordIdleTimer();
+        }
+        if (_statsPendingSentAtUtc != null)
+            ArmStatsIdleTimer();
 
         if (_navigationCompleted && !IsDisposed)
         {
@@ -637,6 +883,13 @@ public partial class TerminalChildForm : Form
     private void OnProcessExited()
     {
         _waitDetector?.NotifyProcessExited();
+        // プロセス終了時も進行中の記録を書き出す
+        _chatRecordIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        var rec = Interlocked.Exchange(ref _activeRecorder, null);
+        rec?.Complete();
+        _statsIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        FlushStatsIfPending();
+        _typedLineBuf.Clear();
         try
         {
             BeginInvoke(() =>
@@ -670,6 +923,10 @@ public partial class TerminalChildForm : Form
                 ApplyTitleBarTint(state);
                 WaitStateChanged?.Invoke(this, state);
                 UpdateAutoSendTimer(prev, state);
+                // チャット記録の完了は ArmChatRecordIdleTimer (出力静穏タイマ) で判定する。
+                // box UI 系 CLI は処理中も入力欄が WaitingForInput と一致してしまうため、
+                // ここで即座に Complete() すると応答本文を捉える前に記録してしまう
+                // (UDR 修正: やりとり一つしか記録できない/応答が空になる不具合)。
             });
         }
         catch { }
@@ -1563,6 +1820,34 @@ public partial class TerminalChildForm : Form
             EditorLinkRequested?.Invoke(this);
         }));
         menu.Items.Add(new ToolStripSeparator());
+
+        // チャット記録トグル: MDI 切替バーボタン右クリック (BuildMdiButtonContextMenuStrip)
+        // と同じスイッチをターミナル本体からも到達できるようにする。
+        var recItem = new ToolStripMenuItem("チャット記録(&C)")
+        {
+            CheckOnClick = true,
+            Checked      = ChatRecordEnabled,
+        };
+        recItem.CheckedChanged += (_, _) => ChatRecordEnabled = recItem.Checked;
+        menu.Items.Add(recItem);
+
+        // 統計情報サブメニュー: BuildMdiButtonContextMenuStrip と同じ構成。
+        var statsMenu = new ToolStripMenuItem("統計情報(&T)");
+        var statsItem = new ToolStripMenuItem("統計情報を記録(&E)")
+        {
+            CheckOnClick = true,
+            Checked      = StatsEnabled,
+        };
+        statsItem.CheckedChanged += (_, _) => StatsEnabled = statsItem.Checked;
+        statsMenu.DropDownItems.Add(statsItem);
+        statsMenu.DropDownItems.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
+        {
+            if (IsDisposed) return;
+            ShowStatsDialog();
+        }));
+        menu.Items.Add(statsMenu);
+        menu.Items.Add(new ToolStripSeparator());
+
         menu.Items.Add(new ToolStripMenuItem("名前変更…", null, (_, _) =>
         {
             if (IsDisposed) return;
@@ -1666,6 +1951,8 @@ public partial class TerminalChildForm : Form
         // 落ちる窓があった。
         _conPty?.Dispose();
         _waitDetector?.Dispose();
+        _chatRecordIdleTimer.Dispose();
+        _statsIdleTimer.Dispose();
         CloseSessionLog();
         UnregisterNativeDropTargets();
     }

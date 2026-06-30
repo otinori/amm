@@ -42,9 +42,6 @@ jobs:
       - name: Test
         run: dotnet test Amm.sln -c Release
 
-      - name: Publish binaries
-        run: tools\publish.cmd
-
       - name: Resolve PR number
         id: pr
         shell: pwsh
@@ -68,6 +65,9 @@ jobs:
           "fourpart=$fourpart" >> $env:GITHUB_OUTPUT
           "prver=$prver"       >> $env:GITHUB_OUTPUT
           "tag=v$prver"        >> $env:GITHUB_OUTPUT
+
+      - name: Publish binaries
+        run: tools\publish.cmd ${{ steps.ver.outputs.prver }}
 
       - name: Build MSI
         run: >

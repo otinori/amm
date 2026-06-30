@@ -8,12 +8,20 @@ REM   amm-mcp.exe   - MCP stdio bridge / CLI / REPL
 REM Both apps are merged flat into artifacts\publish so the MSI can harvest the tree.
 REM NOTE: keep this file ASCII + CRLF. cmd.exe breaks on UTF-8 multibyte comments
 REM       and on LF line endings. Do NOT put parentheses in REM lines either.
+REM
+REM Optional 1st arg: version override (e.g. 1.1.0.0-pr123) forwarded to dotnet
+REM publish as -p:Version=... so AssemblyInformationalVersion (used by the
+REM About dialog) carries the prerelease suffix. Without it, Directory.Build.props
+REM's plain numeric Version is used as-is.
 
 setlocal
 cd /d "%~dp0.." || (
   echo *** failed to cd to repo root: "%~dp0.." ***
   exit /b 1
 )
+
+set "AMM_VERSION_ARG="
+if not "%~1"=="" set "AMM_VERSION_ARG=-p:Version=%~1"
 
 REM Rebuild artifacts\publish from scratch every time. Incremental publish can skip
 REM re-copying files deleted from the output by hand, and the MSI harvests the whole
@@ -24,6 +32,7 @@ echo === Publishing amm GUI ===
 dotnet publish src\apps\Amm\Amm.csproj ^
   -c Release ^
   -p:AmmPublishProfile=win-x64-singlefile ^
+  %AMM_VERSION_ARG% ^
   -o artifacts\publish
 
 if errorlevel 1 (
@@ -37,6 +46,7 @@ echo === Publishing amm-mcp bridge / CLI ===
 dotnet publish src\apps\Amm.Mcp\Amm.Mcp.csproj ^
   -c Release ^
   -p:AmmPublishProfile=win-x64-singlefile ^
+  %AMM_VERSION_ARG% ^
   -o artifacts\publish
 
 if errorlevel 1 (
@@ -49,6 +59,7 @@ echo.
 echo === Building Amm.PowerShell module ===
 dotnet publish src\modules\Amm.PowerShell\Amm.PowerShell.csproj ^
   -c Release ^
+  %AMM_VERSION_ARG% ^
   -o artifacts\publish
 
 if errorlevel 1 (

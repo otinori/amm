@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Amm.Core;
 using Amm.Core.Git;
 using Amm.Core.Mcp;
@@ -30,6 +31,14 @@ public partial class MdiParentForm : Form, IMcpHost
     // 入力欄からの送信に確定改行 (Enter) を同梱するか。OFF = テキストだけ届け、
     // 確定はターミナル側で人間が行う (誤 MDI 送信対策)。layout.json に永続化される。
     private ToolStripMenuItem _sendSubmitEnterMenuItem = null!;
+    // ON = MDI 切替のたびに入力欄の内容を MDI ごとに保存/復元する (下書きを
+    // 子ウィンドウ単位で持つ)。OFF (既定) = 従来どおり入力欄は MDI 間で共有。
+    // モード自体 (ON/OFF) は layout.json に永続化されるが、各 MDI の下書き本文
+    // 自体はセッション (TerminalChildForm) と同様プロセス内のみで amm 終了時に失われる。
+    private ToolStripMenuItem _perMdiInputDraftMenuItem = null!;
+    // _perMdiInputDraftMenuItem が ON のとき、直前にアクティブだった MDI 子。
+    // 次のアクティブ化までに入力欄の内容をこの子の DraftInputText へ退避する。
+    private TerminalChildForm? _inputDraftActiveChild;
     // エディタ連携でファイル保存 → 送信した直後の動作を 3 択で選ぶ排他メニュー。
     // "Focus" = 対象 MDI をアクティブ化 / "Maximize" = アクティブ化 + 最大化 /
     // "None" = 何もしない。値は layout.json に永続化される。
@@ -772,6 +781,8 @@ public partial class MdiParentForm : Form, IMcpHost
         // 入力欄からの送信に確定改行 (Enter) を同梱するか。false = テキストのみ
         // 送り、確定はターミナル側で人間が行う
         public bool SendSubmitEnter { get; set; } = true;
+        // 入力欄を MDI ごとに保持するか (既定 OFF = 従来どおり共有)
+        public bool PerMdiInputDraft { get; set; } = false;
         public bool ShowButtonBar { get; set; } = true;
         public bool ShowInputBox { get; set; } = true;
         public bool ShowStatusBar { get; set; } = true;
@@ -837,6 +848,7 @@ public partial class MdiParentForm : Form, IMcpHost
             _commentFilterMenuItem.Checked = state.CommentFilter;
             _ctrlSSendMenuItem.Checked = state.CtrlSSendEnabled;
             _sendSubmitEnterMenuItem.Checked = state.SendSubmitEnter;
+            _perMdiInputDraftMenuItem.Checked = state.PerMdiInputDraft;
             _showButtonBarMenuItem.Checked = state.ShowButtonBar;
             _showInputBoxMenuItem.Checked = state.ShowInputBox;
             _showStatusBarMenuItem.Checked = state.ShowStatusBar;
@@ -919,6 +931,7 @@ public partial class MdiParentForm : Form, IMcpHost
                 CommentFilter = _commentFilterMenuItem.Checked,
                 CtrlSSendEnabled = _ctrlSSendMenuItem.Checked,
                 SendSubmitEnter = _sendSubmitEnterMenuItem.Checked,
+                PerMdiInputDraft = _perMdiInputDraftMenuItem.Checked,
                 ShowButtonBar = _showButtonBarMenuItem.Checked,
                 ShowInputBox = _showInputBoxMenuItem.Checked,
                 ShowStatusBar = _showStatusBarMenuItem.Checked,
@@ -1166,6 +1179,25 @@ public partial class MdiParentForm : Form, IMcpHost
                           "ターミナル側で手動で行います (誤った MDI への送信防止)。",
         };
         sendMenu.DropDownItems.Add(_sendSubmitEnterMenuItem);
+
+        _perMdiInputDraftMenuItem = new ToolStripMenuItem("入力欄をMDIごとに保持(&D)")
+        {
+            CheckOnClick = true,
+            Checked = false,
+            ToolTipText = "ON にすると MDI を切り替えるたびに入力欄の内容を MDI ごとに\n" +
+                          "保存/復元します。OFF (既定) では従来どおり入力欄は MDI 間で共有されます。\n" +
+                          "このON/OFF設定自体は終了後も保存されますが、各MDIの下書き内容は\n" +
+                          "amm終了時に失われます。",
+        };
+        _perMdiInputDraftMenuItem.CheckedChanged += (_, _) =>
+        {
+            // ON にした瞬間: 現在の入力欄内容を「現在アクティブな子の下書き」として
+            // 紐付け直す (OFF だった間の共有テキストを最初の切替で失わないように)。
+            _inputDraftActiveChild = ActiveMdiChild as TerminalChildForm;
+            if (_perMdiInputDraftMenuItem.Checked && _inputDraftActiveChild != null)
+                _inputDraftActiveChild.DraftInputText = _inputBox.Text;
+        };
+        sendMenu.DropDownItems.Add(_perMdiInputDraftMenuItem);
         sendMenu.DropDownItems.Add(new ToolStripSeparator());
 
         _clearAfterSendMenuItem = new ToolStripMenuItem("送信後に入力欄をクリア(&L)")
@@ -1464,8 +1496,9 @@ public partial class MdiParentForm : Form, IMcpHost
                 var folderName = Path.GetFileName(chosenCwd.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                 if (!string.IsNullOrEmpty(folderName)) suggested = folderName;
             }
-            var newName = PromptNewCommandName(profile.Name, suggested);
-            if (newName == null) return; // キャンセル / 無効入力で中止
+            var prompted = PromptNewCommandName(profile.Name, suggested, profile.ChatRecord, profile.Stats);
+            if (prompted == null) return; // キャンセル / 無効入力で中止
+            var (newName, chatRecord, stats) = prompted.Value;
 
             // (c) clone を作成。新プロファイルは「個別保存可能なユーザ固有
             //     コマンド」として扱うので、再度 PromptNewNameOnCommandAdd /
@@ -1481,6 +1514,8 @@ public partial class MdiParentForm : Form, IMcpHost
             clone.SelectWorkingDirOnStart = false;
             clone.AutoStartCount = 0;
             clone.WindowGeometry = [];
+            clone.ChatRecord = chatRecord;
+            clone.Stats = stats;
             // Nickname (MCP 受信名) は新コマンド名から付与する。テンプレの nickname
             // (例: "claude") をそのまま引き継ぐと send_message recipient=claude
             // mode=first で派生コマンドが候補に混入してしまうため、一意な新名前を
@@ -1552,6 +1587,7 @@ public partial class MdiParentForm : Form, IMcpHost
         child.Activated += (_, _) =>
         {
             _lastActiveTerminal = child;
+            ApplyInputDraftSwitch(child);
             UpdateSendTarget();
         };
         child.AmmSettingsRequested += OnAmmSettingsRequested;
@@ -1650,16 +1686,20 @@ public partial class MdiParentForm : Form, IMcpHost
 
     /// <summary>
     /// 「コマンド」メニューからの追加時、PromptNewNameOnCommandAdd=true の
-    /// プロファイル用にユーザへ新しいコマンド名を尋ねる。OK で空白 / 既存名と
-    /// 衝突した場合は MessageBox を出して null を返す (= 中止)。
+    /// プロファイル用にユーザへ新しいコマンド名・チャット記録・統計情報の
+    /// オンオフを尋ねる。OK で空白 / 既存名と衝突した場合は MessageBox を出して
+    /// null を返す (= 中止)。
     /// </summary>
     /// <param name="sourceName">元プロファイル名 (ダイアログのラベル文言に利用)</param>
     /// <param name="suggested">TextBox の初期値</param>
-    /// <returns>確定された新名前 (空でない、既存と衝突しない)。キャンセル / 無効入力なら null</returns>
-    private string? PromptNewCommandName(string sourceName, string suggested)
+    /// <param name="initialChatRecord">チャット記録チェックボックスの初期値 (元プロファイルから継承)</param>
+    /// <param name="initialStats">統計情報チェックボックスの初期値 (元プロファイルから継承)</param>
+    /// <returns>確定された新名前・チャット記録・統計情報。キャンセル / 無効入力なら null</returns>
+    private (string Name, bool ChatRecord, bool Stats)? PromptNewCommandName(
+        string sourceName, string suggested, bool initialChatRecord, bool initialStats)
     {
         var buttonHeight = Math.Max(28, (SystemFonts.MenuFont?.Height ?? 16) + 12);
-        var buttonY = 80;
+        var buttonY = 138;
         using var dlg = new Form
         {
             Text = "新しい名前でコマンドを追加",
@@ -1682,6 +1722,20 @@ public partial class MdiParentForm : Form, IMcpHost
             Width = 352,
             Text = suggested,
         };
+        var chatRecordCb = new CheckBox
+        {
+            Text = "チャット記録を有効にする",
+            Location = new Point(12, 80),
+            AutoSize = true,
+            Checked = initialChatRecord,
+        };
+        var statsCb = new CheckBox
+        {
+            Text = "統計情報を記録する",
+            Location = new Point(12, 104),
+            AutoSize = true,
+            Checked = initialStats,
+        };
         var ok = new Button
         {
             Text = "OK",
@@ -1700,6 +1754,8 @@ public partial class MdiParentForm : Form, IMcpHost
         };
         dlg.Controls.Add(lbl);
         dlg.Controls.Add(tb);
+        dlg.Controls.Add(chatRecordCb);
+        dlg.Controls.Add(statsCb);
         dlg.Controls.Add(ok);
         dlg.Controls.Add(cancel);
         dlg.AcceptButton = ok;
@@ -1728,7 +1784,7 @@ public partial class MdiParentForm : Form, IMcpHost
                 "新しい名前でコマンドを追加", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
-        return name;
+        return (name, chatRecordCb.Checked, statsCb.Checked);
     }
 
     /// <summary>
@@ -1749,6 +1805,8 @@ public partial class MdiParentForm : Form, IMcpHost
 
     private void OnMdiChildActivate(object? sender, EventArgs e)
     {
+        ApplyInputDraftSwitch();
+
         if (ActiveMdiChild is TerminalChildForm activated)
             _lastActiveTerminal = activated;
         RefreshMdiButtonBar();
@@ -1758,6 +1816,28 @@ public partial class MdiParentForm : Form, IMcpHost
         // 決定なしで解放し、ペイン内プロンプトを表示させる (Approval Hub Level 2)。
         if (ActiveMdiChild is TerminalChildForm active && _approvalBroker != null)
             _approvalBroker.ReleaseByToken(active.NotifyToken);
+    }
+
+    /// <summary>
+    /// 「入力欄をMDIごとに保持」モード時、MDI 切替の前後で入力欄の内容を
+    /// 子ウィンドウごとの DraftInputText と同期する。OFF の間は何もしない
+    /// (= 従来どおり入力欄は共有のまま)。
+    /// WebView2 コンテンツ領域クリックで activation chain が完結せず
+    /// ActiveMdiChild が更新されないケースがあるため (child.Activated の保険と同根)、
+    /// 呼び出し側で確実な対象が分かる場合は <paramref name="next"/> で明示する。
+    /// </summary>
+    private void ApplyInputDraftSwitch(TerminalChildForm? next = null)
+    {
+        if (!_perMdiInputDraftMenuItem.Checked) return;
+        next ??= ActiveMdiChild as TerminalChildForm;
+        if (ReferenceEquals(_inputDraftActiveChild, next)) return;
+
+        if (_inputDraftActiveChild is { IsDisposed: false } prev)
+            prev.DraftInputText = _inputBox.Text;
+
+        _inputDraftActiveChild = next;
+        _inputBox.Text = next?.DraftInputText ?? "";
+        _inputBox.SelectionStart = _inputBox.Text.Length;
     }
 
     private void OnChildWaitStateChanged(TerminalChildForm child, WaitState state)
@@ -1796,6 +1876,8 @@ public partial class MdiParentForm : Form, IMcpHost
             _sessionMap.Remove(closed.SessionId);
             if (ReferenceEquals(_lastActiveTerminal, closed))
                 _lastActiveTerminal = null; // 閉じた子へのフォールバック送信を防ぐ
+            if (ReferenceEquals(_inputDraftActiveChild, closed))
+                _inputDraftActiveChild = null; // 破棄済み子への下書き書き戻しを防ぐ
             // 閉じたペインの許可要求は決定なしで解放 (幽霊要求の防止)
             _approvalBroker?.ReleaseByToken(closed.NotifyToken);
             // WaitBroker: 閉じたセッションの pending wait を timeout 扱いで解放
@@ -2827,7 +2909,10 @@ public partial class MdiParentForm : Form, IMcpHost
     private void ShowAboutDialog()
     {
         var asm = typeof(MdiParentForm).Assembly;
-        var version = asm.GetName().Version?.ToString() ?? "?";
+        // AssemblyVersion (GetName().Version) は数値のみでプレリリース接尾辞 (-prNN 等) を
+        // 保持できないため、CI が Version プロパティ経由で設定する InformationalVersion を使う。
+        var version = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? asm.GetName().Version?.ToString() ?? "?";
         var title = "amm について";
         var body =
             $"amm\n" +
@@ -2978,6 +3063,11 @@ public partial class MdiParentForm : Form, IMcpHost
     /// </summary>
     private static async Task DispatchSendAsync(TerminalChildForm target, string sendText, bool submit = true)
     {
+        if (target.ChatRecordEnabled)
+            target.StartChatRecording(sendText);
+        if (target.StatsEnabled)
+            target.StartStatsTracking();
+
         if (target.Profile.UseBracketedPaste)
         {
             await target.SendAsBracketedPasteAsync(sendText, extraEnter: submit, submit: submit);
@@ -3076,6 +3166,9 @@ public partial class MdiParentForm : Form, IMcpHost
                 };
                 btn.FlatAppearance.BorderColor = Color.FromArgb(160, 160, 160);
                 btn.FlatAppearance.BorderSize = 1;
+                // クリックでフォーカスが当たるため、入力欄と同じ Ctrl+S 等の送信
+                // ショートカットをここでも有効にする (OnInputBoxKeyDown を共用)。
+                btn.KeyDown += OnInputBoxKeyDown;
                 // 色優先順位:
                 //   最小化         → グレー背景 (最小化中を一目で識別)
                 //   許可・確認待ち → オレンジ背景 (attention、最優先で気付かせる)
@@ -3637,7 +3730,49 @@ public partial class MdiParentForm : Form, IMcpHost
         menu.Items.Add(moveUpItem);
         menu.Items.Add(moveDownItem);
 
+        // チャット記録トグル: profiles.amm の初期値を引き継ぎ、実行時に ON/OFF 可能。
+        var recItem = new ToolStripMenuItem("チャット記録(&C)")
+        {
+            CheckOnClick = true,
+            Checked      = target.ChatRecordEnabled,
+        };
+        recItem.CheckedChanged += (_, _) => target.ChatRecordEnabled = recItem.Checked;
+        menu.Items.Add(recItem);
+
+        // 統計情報サブメニュー: 出力オンオフのトグルと表示をまとめる。
+        var statsMenu = new ToolStripMenuItem("統計情報(&T)");
+
+        var statsItem = new ToolStripMenuItem("統計情報を記録(&E)")
+        {
+            CheckOnClick = true,
+            Checked      = target.StatsEnabled,
+        };
+        statsItem.CheckedChanged += (_, _) => target.StatsEnabled = statsItem.Checked;
+        statsMenu.DropDownItems.Add(statsItem);
+
+        statsMenu.DropDownItems.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
+        {
+            if (target.IsDisposed) return;
+            ShowChatStatsDialog(target);
+        }));
+
+        menu.Items.Add(statsMenu);
+
         return menu;
+    }
+
+    /// <summary>
+    /// 指定 MDI の作業ディレクトリ配下の統計情報 (&lt;workDir&gt;\.amm\stats\&lt;yyyyMMdd&gt;\)
+    /// をダイアログで一覧表示する。日付は変更可能、同じ作業ディレクトリを共有する他の
+    /// MDI の集計も合わせて表示する。
+    /// </summary>
+    private static void ShowChatStatsDialog(TerminalChildForm target)
+    {
+        var workDir = string.IsNullOrEmpty(target.OverrideWorkingDirectory)
+            ? (target.Profile.ResolveWorkingDirectory() ?? Environment.CurrentDirectory)
+            : target.OverrideWorkingDirectory;
+        using var dlg = new ChatStatsDialog(workDir);
+        dlg.ShowDialog();
     }
 
     /// <summary>
