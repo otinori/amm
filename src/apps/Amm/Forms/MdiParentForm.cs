@@ -1496,8 +1496,9 @@ public partial class MdiParentForm : Form, IMcpHost
                 var folderName = Path.GetFileName(chosenCwd.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
                 if (!string.IsNullOrEmpty(folderName)) suggested = folderName;
             }
-            var newName = PromptNewCommandName(profile.Name, suggested);
-            if (newName == null) return; // キャンセル / 無効入力で中止
+            var prompted = PromptNewCommandName(profile.Name, suggested, profile.ChatRecord, profile.Stats);
+            if (prompted == null) return; // キャンセル / 無効入力で中止
+            var (newName, chatRecord, stats) = prompted.Value;
 
             // (c) clone を作成。新プロファイルは「個別保存可能なユーザ固有
             //     コマンド」として扱うので、再度 PromptNewNameOnCommandAdd /
@@ -1513,6 +1514,8 @@ public partial class MdiParentForm : Form, IMcpHost
             clone.SelectWorkingDirOnStart = false;
             clone.AutoStartCount = 0;
             clone.WindowGeometry = [];
+            clone.ChatRecord = chatRecord;
+            clone.Stats = stats;
             // Nickname (MCP 受信名) は新コマンド名から付与する。テンプレの nickname
             // (例: "claude") をそのまま引き継ぐと send_message recipient=claude
             // mode=first で派生コマンドが候補に混入してしまうため、一意な新名前を
@@ -1683,16 +1686,20 @@ public partial class MdiParentForm : Form, IMcpHost
 
     /// <summary>
     /// 「コマンド」メニューからの追加時、PromptNewNameOnCommandAdd=true の
-    /// プロファイル用にユーザへ新しいコマンド名を尋ねる。OK で空白 / 既存名と
-    /// 衝突した場合は MessageBox を出して null を返す (= 中止)。
+    /// プロファイル用にユーザへ新しいコマンド名・チャット記録・統計情報の
+    /// オンオフを尋ねる。OK で空白 / 既存名と衝突した場合は MessageBox を出して
+    /// null を返す (= 中止)。
     /// </summary>
     /// <param name="sourceName">元プロファイル名 (ダイアログのラベル文言に利用)</param>
     /// <param name="suggested">TextBox の初期値</param>
-    /// <returns>確定された新名前 (空でない、既存と衝突しない)。キャンセル / 無効入力なら null</returns>
-    private string? PromptNewCommandName(string sourceName, string suggested)
+    /// <param name="initialChatRecord">チャット記録チェックボックスの初期値 (元プロファイルから継承)</param>
+    /// <param name="initialStats">統計情報チェックボックスの初期値 (元プロファイルから継承)</param>
+    /// <returns>確定された新名前・チャット記録・統計情報。キャンセル / 無効入力なら null</returns>
+    private (string Name, bool ChatRecord, bool Stats)? PromptNewCommandName(
+        string sourceName, string suggested, bool initialChatRecord, bool initialStats)
     {
         var buttonHeight = Math.Max(28, (SystemFonts.MenuFont?.Height ?? 16) + 12);
-        var buttonY = 80;
+        var buttonY = 138;
         using var dlg = new Form
         {
             Text = "新しい名前でコマンドを追加",
@@ -1715,6 +1722,20 @@ public partial class MdiParentForm : Form, IMcpHost
             Width = 352,
             Text = suggested,
         };
+        var chatRecordCb = new CheckBox
+        {
+            Text = "チャット記録を有効にする",
+            Location = new Point(12, 80),
+            AutoSize = true,
+            Checked = initialChatRecord,
+        };
+        var statsCb = new CheckBox
+        {
+            Text = "統計情報を記録する",
+            Location = new Point(12, 104),
+            AutoSize = true,
+            Checked = initialStats,
+        };
         var ok = new Button
         {
             Text = "OK",
@@ -1733,6 +1754,8 @@ public partial class MdiParentForm : Form, IMcpHost
         };
         dlg.Controls.Add(lbl);
         dlg.Controls.Add(tb);
+        dlg.Controls.Add(chatRecordCb);
+        dlg.Controls.Add(statsCb);
         dlg.Controls.Add(ok);
         dlg.Controls.Add(cancel);
         dlg.AcceptButton = ok;
@@ -1761,7 +1784,7 @@ public partial class MdiParentForm : Form, IMcpHost
                 "新しい名前でコマンドを追加", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
-        return name;
+        return (name, chatRecordCb.Checked, statsCb.Checked);
     }
 
     /// <summary>
