@@ -104,6 +104,14 @@ public partial class TerminalChildForm : Form
         _activeRecorder = new ChatRecorder(
             saveDir, _profile.ChatRecordTailChars,
             _profile.Name, DisplayName, command);
+
+        // Claude Code / Codex 等は処理中も box プロンプトを表示し続けるため、
+        // 直前の状態が既に WaitingForInput だと Feed() の SetState が
+        // no-op になり (状態不変)、応答完了時の WaitingForInput 遷移も
+        // 検出されず本コマンドの Complete() が一生呼ばれない。送信のたびに
+        // 強制的に Running へ落としておき、応答完了の自然遷移
+        // (Running → WaitingForInput) を毎回確実に発生させる。
+        _waitDetector?.ForceState(WaitState.Running);
     }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>

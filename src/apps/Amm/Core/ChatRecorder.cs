@@ -22,7 +22,11 @@ internal sealed class ChatRecorder
     private readonly StringBuilder _buf = new();
 
     private static readonly JsonSerializerOptions _jsonOptions =
-        new() { WriteIndented = true };
+        new()
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        };
 
     public ChatRecorder(string saveDir, int tailChars,
         string profileName, string mdiName, string command)
