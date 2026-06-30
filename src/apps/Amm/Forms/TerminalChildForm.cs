@@ -49,6 +49,15 @@ public partial class TerminalChildForm : Form
     private DateTime? _statsLastRespondedAtUtc;
     private readonly System.Threading.Timer _statsIdleTimer;
     private const int StatsQuietMs = 1200;
+    // チャット記録/統計情報は元々「下部入力欄からの送信 (DispatchSendAsync)」だけを
+    // 起点にしていたが、ターミナル画面に直接タイプして Enter を押す使い方では
+    // DispatchSendAsync を一切通らないため記録が一切発火しなかった。これを補うため、
+    // xterm.js から逐次届く生キー入力 (OnWebMessageReceived "input") を行単位で
+    // バッファし、Enter (\r/\n) を「送信」とみなして同じ起点 (StartChatRecording /
+    // StartStatsTracking) を呼ぶ。ANSI エスケープ (矢印キー等) は AnsiStripper で
+    // 大まかに除去するが完全ではないため、command 文字列は best-effort。
+    private readonly System.Text.StringBuilder _typedLineBuf = new();
+    private const int TypedLineBufMaxChars = 20000;
     private NativeDropTarget? _nativeDropTarget;
     private readonly List<IntPtr> _dropTargetHwnds = new();
     // xterm.js が fitAddon で算出した実サイズ (ready 時に送られてくる)。
@@ -247,6 +256,53 @@ public partial class TerminalChildForm : Form
             : OverrideWorkingDirectory;
         using var dlg = new ChatStatsDialog(workDir);
         dlg.ShowDialog(this);
+    }
+
+    /// <summary>
+    /// xterm.js から届く生キー入力 (1 文字ずつ、またはペースト時は複数文字まとめて) を
+    /// 行単位でバッファし、Enter (\r/\n) を「コマンド送信」とみなしてチャット記録/
+    /// 統計情報の起点 (DispatchSendAsync が下部入力欄送信時に呼ぶのと同じ
+    /// StartChatRecording / StartStatsTracking) を呼ぶ。どちらのスイッチも OFF なら
+    /// バッファリング自体を行わない。
+    /// </summary>
+    private void TrackTypedInputForRecording(string data)
+    {
+        if (!ChatRecordEnabled && !StatsEnabled) return;
+
+        // 矢印キー等の ANSI エスケープを大まかに除去 (完全ではない best-effort)。
+        var stripped = AnsiStripper.Strip(data);
+        foreach (var ch in stripped)
+        {
+            switch (ch)
+            {
+                case '\r':
+                case '\n':
+                    {
+                        var line = _typedLineBuf.ToString();
+                        _typedLineBuf.Clear();
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            if (ChatRecordEnabled) StartChatRecording(line);
+                            if (StatsEnabled) StartStatsTracking();
+                        }
+                    }
+                    break;
+
+                case '\x7f': // Backspace (DEL)
+                case '\b':
+                    if (_typedLineBuf.Length > 0) _typedLineBuf.Length--;
+                    break;
+
+                case '\x03': // Ctrl+C: 入力中の行を破棄
+                    _typedLineBuf.Clear();
+                    break;
+
+                default:
+                    if (!char.IsControl(ch) && _typedLineBuf.Length < TypedLineBufMaxChars)
+                        _typedLineBuf.Append(ch);
+                    break;
+            }
+        }
     }
 
     /// <summary>同一プロファイル内のインスタンス番号 (1-based)。1 の時はタイトルに番号を付けない。</summary>
@@ -604,7 +660,10 @@ public partial class TerminalChildForm : Form
                 case "input":
                     var data = root.GetProperty("data").GetString();
                     if (data != null)
+                    {
                         _conPty?.Write(data);
+                        TrackTypedInputForRecording(data);
+                    }
                     break;
 
                 case "resize":
@@ -830,6 +889,7 @@ public partial class TerminalChildForm : Form
         rec?.Complete();
         _statsIdleTimer.Change(Timeout.Infinite, Timeout.Infinite);
         FlushStatsIfPending();
+        _typedLineBuf.Clear();
         try
         {
             BeginInvoke(() =>
