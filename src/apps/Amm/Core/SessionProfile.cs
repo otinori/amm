@@ -231,7 +231,7 @@ public sealed class SessionProfile
     /// 保存先: &lt;workingDirectory&gt;\.amm\stats\&lt;yyyyMMdd&gt;\&lt;コマンド名&gt;-&lt;mdi名&gt;.json
     /// </summary>
     [JsonPropertyName("stats")]
-    public bool Stats { get; set; } = false;
+    public bool Stats { get; set; } = true;
 
     /// <summary>
     /// xterm.js の theme オプションへそのまま渡すキー/値。
