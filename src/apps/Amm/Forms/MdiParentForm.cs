@@ -3713,20 +3713,24 @@ public partial class MdiParentForm : Form, IMcpHost
         recItem.CheckedChanged += (_, _) => target.ChatRecordEnabled = recItem.Checked;
         menu.Items.Add(recItem);
 
-        // 統計情報トグル: チャット記録とは独立したスイッチ。
-        var statsItem = new ToolStripMenuItem("統計情報(&T)")
+        // 統計情報サブメニュー: 出力オンオフのトグルと表示をまとめる。
+        var statsMenu = new ToolStripMenuItem("統計情報(&T)");
+
+        var statsItem = new ToolStripMenuItem("統計情報を記録(&E)")
         {
             CheckOnClick = true,
             Checked      = target.StatsEnabled,
         };
         statsItem.CheckedChanged += (_, _) => target.StatsEnabled = statsItem.Checked;
-        menu.Items.Add(statsItem);
+        statsMenu.DropDownItems.Add(statsItem);
 
-        menu.Items.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
+        statsMenu.DropDownItems.Add(new ToolStripMenuItem("統計情報を表示…", null, (_, _) =>
         {
             if (target.IsDisposed) return;
             ShowChatStatsDialog(target);
         }));
+
+        menu.Items.Add(statsMenu);
 
         return menu;
     }
