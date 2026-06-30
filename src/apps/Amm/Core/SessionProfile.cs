@@ -212,7 +212,8 @@ public sealed class SessionProfile
 
     /// <summary>
     /// true の場合、送信コマンドと応答末尾を JSON ファイルとして記録する。
-    /// 保存先: &lt;workingDirectory&gt;\.amm\&lt;timestamp&gt;-&lt;rand&gt;.json
+    /// 保存先: &lt;workingDirectory&gt;\.amm\logs\&lt;yyyyMMdd&gt;\&lt;timestamp&gt;-&lt;rand&gt;.json
+    /// 同フォルダに日次の index.json (送信時刻・プロンプト1行目・対応ファイル名の一覧) も書く。
     /// </summary>
     [JsonPropertyName("chatRecord")]
     public bool ChatRecord { get; set; } = false;

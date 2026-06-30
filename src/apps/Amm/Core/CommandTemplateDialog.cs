@@ -298,7 +298,7 @@ public sealed class CommandTemplateDialog : Form
 
         _chatRecord = new CheckBox
         {
-            Text = "コマンド送信と応答末尾を .amm フォルダに JSON 記録する",
+            Text = "コマンド送信と応答末尾を .amm\\logs\\yyyyMMdd フォルダに JSON 記録する",
             AutoSize = true,
             Checked = initialProfile.ChatRecord,
         };
