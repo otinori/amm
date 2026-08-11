@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "amm",
+  "mainBinaryName": "amm",
+  "version": "1.2.0",
+  "identifier": "com.otinori.amm",
+  "build": {
+    "frontendDist": "../public"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "amm",
+        "url": "index.html",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 400,
+        "minHeight": 300,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "amm contributors",
+    "copyright": "Copyright (c) amm contributors",
+    "licenseFile": "../../../installer/wix/License.rtf",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/*": "./",
+      "../../../../src/modules/Amm.PowerShell": "Amm.PowerShell",
+      "../profiles.amm": "./",
+      "../../../../docs/manual/user-guide/usage.md": "./"
+    },
+    "fileAssociations": [
+      {
+        "ext": ["amm"],
+        "name": "amm profiles file",
+        "description": "amm session profiles",
+        "role": "Editor"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "nsis/hooks.nsh",
+        "languages": ["English", "Japanese"]
+      },
+      "wix": {
+        "fragmentPaths": ["wix/fragments/path-environment.wxs"],
+        "componentRefs": ["AmmPathEnvironment"]
+      }
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

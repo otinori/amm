@@ -1,0 +1,24 @@
+{
+  "profiles": [
+    {
+      "name": "CMD",
+      "commandType": "Cmd",
+      "executable": "cmd.exe",
+      "args": [],
+      "newlineMode": "CRLF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": true,
+      "waitPatterns": ["[>]\\s*$"],
+      "workingDirectory": "",
+      "promptNewNameOnCommandAdd": false
+    }
+  ],
+  "mcpServers": [
+    {
+      "name": "test-autostart-fixture",
+      "command": "node",
+      "args": ["C:/project/github/amm/tests/e2e-tauri/fixture-mcp-server.js"],
+      "autoStart": true
+    }
+  ]
+}

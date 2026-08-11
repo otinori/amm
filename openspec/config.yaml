@@ -1,0 +1,34 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+context: |
+  amm: Windows/macOS multi-AI-CLI multiplexer, single-window pane management (Tauri v2/Rust +
+  WebView2/WKWebView + xterm.js + portable-pty GUI). Sole implementation: src/apps/Amm/
+  (Tauri/Rust, src-tauri/ + public/). The prior legacy .NET WinForms/MDI implementation was
+  cut over to Tauri (2026-07-26, see UDR-amm-20260725T2147-87c) and later removed entirely
+  ahead of public release. Sub-projects: Amm/src-tauri (GUI + embedded MCP server +
+  amm-mcp.exe bin crate), modules/Amm.PowerShell (.psm1 script module, no compile step).
+  Commit convention is NOT Conventional Commits: use phase prefixes design:/impl:/test:/retro:
+  (see AGENTS.md §3.3). Branch convention: claude/<task> (+ optional /design,/impl,/test
+  sub-branches), PR to main (see AGENTS.md §3 / §3.6). Architectural/requirement-interpretation
+  decisions are not tracked here. openspec/specs/ is the as-is behavior baseline
+  for the current (Tauri) implementation — treat existing specs as descriptive of current
+  behavior, not aspirational, unless a change explicitly proposes new behavior.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

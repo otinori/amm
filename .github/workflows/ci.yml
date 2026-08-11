@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-build-and-test:
+    # src/apps/Amm is a Cargo project. windows-latest already ships MSVC/Visual
+    # Studio Build Tools, so no extra native toolchain setup is needed beyond
+    # the Rust toolchain itself.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/apps/Amm/src-tauri
+
+      - name: Build
+        working-directory: src/apps/Amm/src-tauri
+        run: cargo build --locked --all-targets
+
+      - name: Test
+        working-directory: src/apps/Amm/src-tauri
+        run: cargo test --locked --lib

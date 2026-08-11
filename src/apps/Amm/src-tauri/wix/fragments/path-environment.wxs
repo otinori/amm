@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  tasks.md 6.1's documented gap: the Tauri bundler has no built-in
+  equivalent of the old WiX (.NET/WinForms) installer's PathEnvironment
+  component (src/installer/wix/Package.wxs), so a fresh MSI install left
+  users unable to run `amm` from an existing/new cmd.exe or PowerShell
+  window without a full path. Mirrors that component almost exactly:
+  appends INSTALLDIR to the system PATH (Part="last") on install, and lets
+  MSI's own Environment-table handling remove exactly that appended value
+  on uninstall (no custom actions, no manual registry/WM_SETTINGCHANGE
+  code needed - the Windows Installer engine does this natively for
+  Environment table entries).
+
+  Referenced from tauri.conf.json's bundle.windows.wix.fragmentPaths /
+  componentRefs. `INSTALLDIR` matches the directory id Tauri's own
+  generated main.wxs uses (confirmed against a real generated
+  target/release/wix/x64/main.wxs, tasks.md 4.1/8.2.3 sessions) - if a
+  future tauri-bundler upgrade renames that id, this fragment's
+  DirectoryRef must be updated to match.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <!-- Win64 hardcoded "yes": this fragment is compiled by candle.exe as
+           its own standalone unit (separately from Tauri's generated
+           main.wxs, confirmed via a real `candle.exe -arch x64
+           path-environment.wxs` run - "$(var.Win64)" is undefined here
+           since that variable is only defined inside main.wxs's own
+           preprocessor block, not shared across files). This project only
+           ever targets x64 (README.md/tasks.md), so there's no x86/arm64
+           case to handle. -->
+      <Component Id="AmmPathEnvironment" Guid="79980CB4-6705-412C-8E99-5E8E511ABC14" Win64="yes">
+        <!-- KeyPath: an HKLM registry value (not a file), matching this
+             package's perMachine scope and the old WiX version's own
+             PathEnvironment component - a marker distinct from the actual
+             `amm.exe` file component so this component's
+             install/uninstall lifecycle is tracked independently. -->
+        <RegistryValue Root="HKLM" Key="Software\amm contributors\amm" Name="PathEnvironmentAdded" Type="integer" Value="1" KeyPath="yes" />
+        <Environment Id="AmmUpdateSystemPath"
+                     Name="PATH"
+                     Action="set"
+                     Part="last"
+                     System="yes"
+                     Permanent="no"
+                     Separator=";"
+                     Value="[INSTALLDIR]" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

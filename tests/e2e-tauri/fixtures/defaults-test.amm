@@ -1,0 +1,16 @@
+{
+  "profiles": [
+    {
+      "name": "DefaultsTest",
+      "commandType": "Cmd",
+      "executable": "cmd.exe",
+      "args": [],
+      "newlineMode": "CRLF",
+      "outputEncoding": "UTF-8",
+      "waitPatterns": ["[>]\\s*$"],
+      "workingDirectory": "",
+      "theme": "this-is-a-string-not-an-object",
+      "promptNewNameOnCommandAdd": false
+    }
+  ]
+}

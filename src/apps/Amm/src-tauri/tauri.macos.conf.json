@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../profiles.amm": null,
+      "../profiles.macos.amm": "./profiles.amm"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Windows batch scripts must stay CRLF (cmd.exe misbehaves on LF) and ASCII-only
+# (UTF-8 multibyte comments break double-click execution under the console codepage).
+*.cmd text eol=crlf
+*.bat text eol=crlf

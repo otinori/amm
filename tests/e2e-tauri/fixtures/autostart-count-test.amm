@@ -1,0 +1,17 @@
+{
+  "profiles": [
+    {
+      "name": "AutoStartCountTest",
+      "commandType": "Cmd",
+      "executable": "cmd.exe",
+      "args": [],
+      "newlineMode": "CRLF",
+      "outputEncoding": "UTF-8",
+      "autoChcp": true,
+      "waitPatterns": ["[>]\\s*$"],
+      "workingDirectory": "",
+      "autoStartCount": 3,
+      "promptNewNameOnCommandAdd": false
+    }
+  ]
+}

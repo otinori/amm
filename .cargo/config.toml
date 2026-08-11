@@ -1,0 +1,5 @@
+# Rustのビルド中間生成物(target/)を、.NET側と同様にリポジトリ直下のartifacts/へ
+# 集約する(既定ではsrc/apps/Amm/src-tauri/target/に生成される)。artifacts/は
+# 既にgitignore対象のため二重に無視する必要はない。
+[build]
+target-dir = "artifacts/target"

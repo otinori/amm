@@ -1,0 +1,162 @@
+html, body { margin: 0; height: 100%; background: #14141a; font-family: system-ui, sans-serif; overflow: hidden; }
+
+/* spec: pane-management - WKWebViewの既定動作では、ボタン等のテキストを
+   含む要素をマウスで長押し(トラックパッドのForce Click/長押し等)すると、
+   選択範囲の拡大鏡や「コピー」等を提示する独自の「callout」UIがネイティブ
+   に出てしまう(ユーザー報告2026-08-05:「ボタンをマウスで長押ししても変な
+   メニューが表示される」)。アプリのUI chrome(ボタン・コンテキストメニュー
+   項目)はテキスト選択自体が無意味なので、-webkit-touch-calloutとuser-select
+   をまとめて無効化する。ペインのターミナル本体(xterm.js、実際に選択したい
+   対象)には適用しない。 */
+button, .ctx-menu-item, .modal-btn {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #24242c; border-bottom: 1px solid #3c3c3c; flex: 0 0 auto; }
+#toolbar button { padding: 4px 10px; border-radius: 4px; border: 1px solid #555; background: #3a3a3a; color: #ddd; cursor: pointer; font-size: 12px; }
+#toolbar button:hover { background: #4a4a4a; }
+#toolbar button.toggled-off { opacity: 0.5; }
+
+#app { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+#desk { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #14141a; }
+
+.pane { position: absolute; display: flex; flex-direction: column; background: #1e1e1e; border: 1px solid #444; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.4); min-width: 200px; min-height: 120px; }
+.pane.attention-warn { border-color: #d18616; }
+/* border-bottom is always 3px (even outside state-waiting/state-attention)
+   so entering/leaving those states only changes its color, never the
+   title bar's height - see the state rules below for why. */
+.pane-title { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; background: var(--pane-title-bg, #2d2d34); color: #ccc; font-size: 11px; cursor: move; user-select: none; border-bottom: 3px solid #444; border-radius: 4px 4px 0 0; }
+/* spec: pane-management's titleBarColor (ユーザー要望) - waiting/attention
+   used to replace the whole title bar background, which permanently hid a
+   pane's per-command identity color for however long it sat idle waiting
+   for input (i.e. most of the time for an AI CLI). Signaled via this
+   border stripe instead so the identity color stays visible at all times. */
+.pane-title.state-waiting { border-bottom-color: #d4c430; }
+.pane-title.state-attention { border-bottom-color: #ff9800; }
+.pane-title-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-close { flex: 0 0 auto; cursor: pointer; opacity: 0.7; padding: 0 4px; }
+.pane-close:hover { opacity: 1; }
+.pane-zoom { flex: 0 0 auto; cursor: pointer; opacity: 0.7; padding: 0 4px; font-size: 12px; }
+.pane-zoom:hover { opacity: 1; }
+.pane-menu { flex: 0 0 auto; cursor: pointer; opacity: 0.7; padding: 0 4px; font-size: 12px; }
+.pane-menu:hover { opacity: 1; }
+/* spec: pane-management - タイトルバー直接のツールアイコン(名前変更/フォント
+   サイズ/エディタ連携/エディタ連携ファイルパスコピー)。既存の.pane-menu等と
+   同じ見た目・当たり判定に揃える。 */
+.pane-tool-icon { flex: 0 0 auto; cursor: pointer; opacity: 0.7; padding: 0 4px; font-size: 12px; }
+.pane-tool-icon:hover { opacity: 1; }
+.pane-body { flex: 1; min-height: 0; padding: 4px; }
+.pane-term { height: 100%; }
+
+/* Drag-to-reorder overlay: highlights which pane a dragged title bar would
+   swap grid slots with if released now. */
+.dock-overlay { position: fixed; background: rgba(122, 162, 255, 0.35); border: 2px solid #7aa2ff; box-sizing: border-box; pointer-events: none; z-index: 500; }
+
+#bottom-panel { flex: 0 0 auto; display: flex; flex-direction: column; background: #1a1a20; border-top: 1px solid #3c3c3c; }
+#quick-switch-bar { display: flex; gap: 4px; padding: 4px 8px; flex: 0 0 auto; overflow-x: auto; }
+#quick-switch-bar button { padding: 2px 8px; border-radius: 4px; border: 1px solid #555; background: #2d2d34; color: #ccc; cursor: pointer; font-size: 11px; white-space: nowrap; }
+#quick-switch-bar button.active { border-color: #7aa2ff; color: #fff; }
+/* spec: pane-management's new "クイック切替バーの状態表示と操作メニュー" -
+   same color vocabulary as .pane-title's state-waiting/state-attention. */
+#quick-switch-bar button.qsb-waiting { background: #6b6420; color: #fff; }
+#quick-switch-bar button.qsb-attention { background: #8a4a12; color: #fff; border-color: #d18616; }
+#quick-switch-bar button.qsb-active { border-color: #7aa2ff; color: #fff; background: #2d3d54; }
+#quick-switch-bar button.qsb-stopped { background: #2a2a2e; color: #888; }
+#input-row { flex: 0 0 180px; padding: 6px 8px; box-sizing: border-box; }
+#prompt-input { width: 100%; height: 100%; box-sizing: border-box; resize: none; background: #1e1e1e; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px; }
+#status-line { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; color: #9cdcfe; background: #1a1a20; border-top: 1px solid #2c2c34; }
+
+.hidden { display: none !important; }
+
+#history-dropdown { position: absolute; left: 8px; right: 8px; bottom: 100%; margin-bottom: 4px; max-height: 240px; overflow-y: auto; background: #2d2d34; border: 1px solid #555; border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,.4); z-index: 100; }
+.history-item { padding: 4px 8px; font-size: 12px; color: #ddd; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item:hover { background: #3a3a44; }
+.history-item.highlighted { background: #3a5a9a; }
+.history-item.disabled { color: #888; cursor: default; }
+.history-item.disabled:hover { background: transparent; }
+
+/* Right-click context menus (spec: quick-command-register and others) */
+.ctx-menu { position: fixed; z-index: 500; background: #2d2d34; border: 1px solid #555; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.5); padding: 4px 0; min-width: 190px; font-size: 12px; color: #ddd; }
+.ctx-menu-item { padding: 6px 14px; cursor: pointer; white-space: nowrap; position: relative; display: flex; align-items: center; gap: 6px; }
+.ctx-menu-swatch { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 2px; border: 1px solid rgba(255,255,255,.25); }
+.ctx-menu-item:hover:not(.disabled) { background: #3a3a44; }
+.ctx-menu-item.disabled { color: #777; cursor: default; }
+.ctx-menu-sep { height: 1px; background: #444; margin: 4px 0; }
+/* margin-left:auto pushes this to the far end of the now-flex .ctx-menu-item
+   (float had no effect on a flex item once .ctx-menu-item became a flex
+   container for the color swatch - see .ctx-menu-swatch). */
+.ctx-submenu-arrow { margin-left: auto; padding-left: 16px; opacity: .7; }
+.ctx-menu-item.has-submenu .ctx-submenu { position: absolute; left: 100%; top: -5px; display: none; }
+.ctx-menu-item.has-submenu:hover > .ctx-submenu { display: block; }
+.ctx-submenu-empty { padding: 6px 14px; color: #777; }
+
+/* spec: approval-hub Level 2's 非モーダル集約ポップアップUI - an in-main-window
+   DOM overlay (not a second WebviewWindow, see app.js's approvalOverlay
+   comment for why). z-index above .modal-overlay/.ctx-menu so a pending
+   approval stays visible even while another dialog is open. 2026-07-27:
+   ボタンを「はい」(allow)/「確認」(ペインへ移動)の2択のみに簡略化
+   (拒否/閉じるは撤去、ユーザー指示)。 */
+.approval-overlay { position: fixed; top: 12px; right: 12px; width: 280px; box-sizing: border-box; padding: 10px 12px; background: #a35a1a; color: #fff; border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,.6); z-index: 1200; font-family: system-ui, sans-serif; }
+.approval-count { font-size: 11px; opacity: .85; }
+.approval-tool { font-weight: bold; margin: 4px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-input { font-size: 11px; opacity: .8; max-height: 60px; overflow: hidden; text-overflow: ellipsis; }
+.approval-buttons { display: flex; gap: 6px; margin-top: 6px; }
+.approval-buttons button { flex: 1; padding: 4px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; }
+.approval-allow { background: #2e7d32; color: #fff; }
+.approval-buttons button:disabled { opacity: .5; cursor: default; }
+.approval-confirm { background: transparent; border: 1px solid rgba(255,255,255,.4); color: #fff; }
+.approval-confirm:hover { background: rgba(255,255,255,.15); }
+
+/* spec: TUI選択状態(Notification hookのpermission_prompt/elicitation_dialog、
+   OSC9由来のattention等、構造化されたamm/approvalを伴わないもの全般)向けの
+   軽量な「確認」ポップアップ。承認オーバーレイと同じ見た目・位置系だが、その
+   下に積むよう縦オフセットのみ変える(ユーザー指示、2026-07-27)。 */
+.attention-overlay { top: 96px; }
+#attention-confirm { width: 100%; margin-top: 6px; padding: 6px; font-size: 12px; border-radius: 4px; cursor: pointer; }
+
+/* Generic modal dialogs (spec: quick-command-register / command-import-export / mcp-gateway / profile-schema) */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal-box { background: #24242c; border: 1px solid #555; border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,.6); padding: 16px; min-width: 380px; max-width: 90vw; max-height: 85vh; overflow-y: auto; color: #ddd; font-size: 13px; box-sizing: border-box; }
+/* spec: pane-management - 項目が少ないダイアログ(コマンド追加-種類を選択等)
+   向けの半幅版(ユーザー報告: 横に長すぎる)。 */
+.modal-box.modal-box-narrow { max-width: 420px; }
+.modal-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+.modal-field { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+.modal-field label { font-size: 11px; color: #aaa; }
+.modal-field input[type=text], .modal-field textarea, .modal-field select { background: #1e1e1e; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px; box-sizing: border-box; width: 100%; }
+.modal-field textarea { resize: vertical; min-height: 110px; }
+/* spec: pane-management - 数字だけの項目用のラベル・入力欄横並びレイアウト
+   (addModalNumberField、コマンド追加編集画面の起動時自動生成数・遅延秒数)。 */
+.modal-field-inline { flex-direction: row; align-items: center; gap: 8px; }
+.modal-field-inline label { flex: 1; font-size: 12px; color: #ddd; }
+.modal-field-inline input[type=number] { width: 70px; flex: 0 0 auto; background: #1e1e1e; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-family: 'Cascadia Code', Consolas, monospace; font-size: 13px; box-sizing: border-box; }
+.modal-hint { font-size: 11px; color: #888; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-actions button { padding: 5px 14px; border-radius: 4px; border: 1px solid #555; background: #3a3a3a; color: #ddd; cursor: pointer; font-size: 12px; }
+.modal-actions button:hover:not(:disabled) { background: #4a4a4a; }
+.modal-actions button.primary { background: #3a5a9a; border-color: #4a6aba; }
+.modal-actions button.primary:hover:not(:disabled) { background: #4a6aba; }
+.modal-actions button:disabled { opacity: .5; cursor: default; }
+.modal-list { border: 1px solid #444; border-radius: 4px; max-height: 240px; overflow-y: auto; }
+.modal-list-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-bottom: 1px solid #333; }
+.modal-list-item:last-child { border-bottom: none; }
+.modal-list-item label { color: #ddd; font-size: 12px; flex: 1; }
+.modal-status-icon { display: inline-block; width: 1.4em; text-align: center; }
+.modal-select-row { display: flex; gap: 8px; margin-top: 8px; }
+.modal-select-row button { padding: 4px 10px; border-radius: 4px; border: 1px solid #555; background: #3a3a3a; color: #ddd; cursor: pointer; font-size: 11px; }
+.modal-select-row button:hover { background: #4a4a4a; }
+.modal-radio-row { display: flex; gap: 14px; font-size: 12px; }
+.modal-radio-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; color: #ddd; }
+.modal-list-item button, .modal-btn { padding: 2px 9px; border-radius: 4px; border: 1px solid #555; background: #3a3a3a; color: #ddd; cursor: pointer; font-size: 11px; }
+.modal-list-item button:hover, .modal-btn:hover { background: #4a4a4a; }
+.modal-btn { margin-top: 6px; }
+.modal-group-title { font-size: 12px; font-weight: 600; color: #bbb; margin: 12px 0 6px; }
+.modal-group-title:first-of-type { margin-top: 0; }
+/* spec: pane-management - 「コマンドを管理」の「コマンド」/「コマンドタイプ」
+   タブ切り替え(コマンド追加編集画面のUIとは別、ダイアログ内タブバー)。 */
+.modal-tab-bar { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid #444; }
+.modal-tab { padding: 6px 14px; border: none; background: transparent; color: #999; cursor: pointer; font-size: 12px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.modal-tab:hover { color: #ddd; }
+.modal-tab.active { color: #fff; border-bottom-color: #4a6aba; }

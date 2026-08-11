@@ -1,0 +1,89 @@
+.vscode/
+.idea/
+*.iml
+
+# Claude Code 個人設定
+.claude/settings.local.json
+
+# 実機テスト時にamm.exeがルート直下へ自動保存するライブ実行時プロファイル
+# (配布用既定は src/apps/Amm/profiles.amm が正本。誤って混入させない)
+/profiles.amm
+
+# release-audit skill (旧名 pre-public-audit) の監査成果物（ローカル記録用ドラフト。
+# コミットする場合は別名 docs/audits/<日付>-... へリネームしたコピーを使う）
+/PRE_PUBLIC_AUDIT_EVIDENCE.md
+/PRE_PUBLIC_AUDIT_REPORT.md
+/RELEASE_AUDIT_EVIDENCE.md
+/RELEASE_AUDIT_REPORT.md
+
+# OS 生成物
+Thumbs.db
+desktop.ini
+
+# 秘密/認証情報ファイル（先回り登録。A-1参照）
+.env
+.env.*
+!.env.example
+!.env.*.sample
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+*.tfstate
+*.tfstate.backup
+.netrc
+.pgpass
+.git-credentials
+.htpasswd
+
+# 成果物出力 (構成案: artifacts/ に EXE/DLL/publish/packages を集約)
+artifacts/
+
+# WebView2 Fixed Version Runtime
+runtimes/webview2/
+
+# Node
+node_modules/
+
+# Rust / Tauri (src/apps/Amm)
+# ビルド中間生成物は.cargo/config.tomlのtarget-dirでartifacts/target/へ集約済み
+# (artifacts/で既にignore対象)。target/はここでは念のための保険としてのみ残す
+# (他クレート追加時に集約から漏れた場合の保険)。
+target/
+src/apps/Amm/src-tauri/gen/
+src/apps/Amm/src-tauri/src/bin/*.exe
+src/apps/Amm/src-tauri/src/bin/*.pdb
+
+# amm-mcp.exe / Amm.PowerShell staged here by tools/publish-tauri.cmd for
+# tauri.conf.json's bundle.resources. .gitkeep only so a fresh checkout's
+# `cargo build`/`cargo test` (resources glob is resolved at every build,
+# not just `cargo tauri build`) doesn't fail on a missing directory.
+src/apps/Amm/src-tauri/resources/*
+!src/apps/Amm/src-tauri/resources/.gitkeep
+
+# Flutter / Dart (reference/poc-flutter-terminal 検証用)
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+reference/poc-flutter-terminal/build/
+
+# POC検証エビデンス画像 (release-audit 2026-08-11: 実名/実ユーザー名/実マシン名が
+# 写り込んだスクリーンショットを含むため全件コミット対象外。開発機能には無関係)
+reference/**/shots*/
+
+# 申し送りメモ(開発中の経緯・生の作業ログを含む私的な作業ノート。2026-08-11、
+# ユーザー判断によりコミット対象外化。ローカルでは引き続き使用する)
+/HANDOVER.md
+
+# Logs
+*.log
+*.lnk
+
+# amm自身のランタイムデータ (.amm/logs, .amm/stats 等) - チャット記録/統計機能が
+# ペインの作業ディレクトリ相対に生成する。このリポジトリ自身をamm.exeのcwdに
+# して実機テストすると生成される(2026-07-21、実機検証セッションで発生)。
+.amm/
+
+.DS_Store

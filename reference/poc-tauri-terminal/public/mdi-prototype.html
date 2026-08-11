@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>mdi-prototype — 単一ウィンドウ内ペイン管理のPoC</title>
+<link rel="stylesheet" href="xterm.css" />
+<style>
+  html, body { margin: 0; height: 100%; background: #14141a; font-family: system-ui, sans-serif; overflow: hidden; }
+  #toolbar { display: flex; gap: 6px; padding: 6px 8px; background: #24242c; border-bottom: 1px solid #3c3c3c; }
+  #toolbar button { padding: 4px 10px; border-radius: 4px; border: 1px solid #555; background: #3a3a3a; color: #ddd; cursor: pointer; font-size: 12px; }
+  #toolbar button:hover { background: #4a4a4a; }
+  #desk { position: relative; height: calc(100% - 33px); overflow: hidden; }
+  .pane { position: absolute; display: flex; flex-direction: column; background: #1e1e1e; border: 1px solid #444; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.4); min-width: 200px; min-height: 120px; }
+  .pane-title { flex: 0 0 auto; padding: 3px 8px; background: #2d2d34; color: #ccc; font-size: 11px; cursor: move; user-select: none; border-bottom: 1px solid #444; border-radius: 4px 4px 0 0; }
+  .pane-body { flex: 1; min-height: 0; padding: 4px; }
+  .pane-term { height: 100%; }
+  .resize-handle { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, #666 50%); }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="btn-tile">タイル</button>
+  <button id="btn-cascade">カスケード</button>
+  <button id="btn-add">ペイン追加</button>
+  <button id="btn-reset">配置リセット(記憶消去)</button>
+  <span style="color:#888;font-size:11px;align-self:center;margin-left:8px;">配置はlocalStorageに自動保存 → リロードで復元</span>
+</div>
+<div id="desk"></div>
+
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+const STORAGE_KEY = 'mdi-prototype-layout-v1';
+const desk = document.getElementById('desk');
+let panes = []; // { id, el, term, fitAddon, ws }
+let nextId = 1;
+let zTop = 1;
+
+function loadLayout() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; }
+  catch { return null; }
+}
+function saveLayout() {
+  const layout = panes.map(p => ({
+    id: p.id,
+    x: p.el.offsetLeft, y: p.el.offsetTop,
+    w: p.el.offsetWidth, h: p.el.offsetHeight,
+    z: p.el.style.zIndex || 1,
+  }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
+}
+
+function createPane(rect) {
+  const id = rect?.id ?? nextId++;
+  const el = document.createElement('div');
+  el.className = 'pane';
+  el.style.left = (rect?.x ?? 20 + (id * 20)) + 'px';
+  el.style.top = (rect?.y ?? 20 + (id * 20)) + 'px';
+  el.style.width = (rect?.w ?? 480) + 'px';
+  el.style.height = (rect?.h ?? 300) + 'px';
+  el.style.zIndex = rect?.z ?? (++zTop);
+  el.innerHTML = `
+    <div class="pane-title">ペイン #${id} (ドラッグで移動)</div>
+    <div class="pane-body"><div class="pane-term"></div></div>
+    <div class="resize-handle"></div>
+  `;
+  desk.appendChild(el);
+
+  const term = new Terminal({ fontFamily: 'Cascadia Code, Consolas, monospace', fontSize: 13, theme: { background: '#1e1e1e', foreground: '#d4d4d4' } });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(el.querySelector('.pane-term'));
+  fitAddon.fit();
+
+  const ws = new WebSocket(`ws://${location.host}/pty`);
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'data') term.write(msg.data);
+  };
+  term.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data })); });
+
+  const pane = { id, el, term, fitAddon, ws };
+  panes.push(pane);
+
+  // drag by title bar
+  const title = el.querySelector('.pane-title');
+  title.addEventListener('mousedown', (e) => {
+    el.style.zIndex = ++zTop;
+    const startX = e.clientX, startY = e.clientY;
+    const origX = el.offsetLeft, origY = el.offsetTop;
+    const onMove = (ev) => {
+      el.style.left = (origX + ev.clientX - startX) + 'px';
+      el.style.top = (origY + ev.clientY - startY) + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveLayout();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  // resize by handle
+  const handle = el.querySelector('.resize-handle');
+  handle.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const origW = el.offsetWidth, origH = el.offsetHeight;
+    const onMove = (ev) => {
+      el.style.width = Math.max(200, origW + ev.clientX - startX) + 'px';
+      el.style.height = Math.max(120, origH + ev.clientY - startY) + 'px';
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      saveLayout();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  return pane;
+}
+
+function tileLayout() {
+  const n = panes.length;
+  if (n === 0) return;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const w = Math.floor(desk.clientWidth / cols);
+  const h = Math.floor(desk.clientHeight / rows);
+  panes.forEach((p, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    p.el.style.left = (col * w) + 'px';
+    p.el.style.top = (row * h) + 'px';
+    p.el.style.width = (w - 6) + 'px';
+    p.el.style.height = (h - 6) + 'px';
+    p.fitAddon.fit();
+    if (p.ws.readyState === WebSocket.OPEN) p.ws.send(JSON.stringify({ type: 'resize', cols: p.term.cols, rows: p.term.rows }));
+  });
+  saveLayout();
+}
+
+function cascadeLayout() {
+  panes.forEach((p, i) => {
+    p.el.style.left = (20 + i * 32) + 'px';
+    p.el.style.top = (20 + i * 32) + 'px';
+    p.el.style.width = '480px';
+    p.el.style.height = '300px';
+    p.el.style.zIndex = ++zTop;
+    p.fitAddon.fit();
+    if (p.ws.readyState === WebSocket.OPEN) p.ws.send(JSON.stringify({ type: 'resize', cols: p.term.cols, rows: p.term.rows }));
+  });
+  saveLayout();
+}
+
+document.getElementById('btn-tile').onclick = tileLayout;
+document.getElementById('btn-cascade').onclick = cascadeLayout;
+document.getElementById('btn-add').onclick = () => { createPane(); saveLayout(); };
+document.getElementById('btn-reset').onclick = () => { localStorage.removeItem(STORAGE_KEY); location.reload(); };
+
+// restore or seed initial layout
+const saved = loadLayout();
+if (saved && saved.length > 0) {
+  saved.forEach(rect => { nextId = Math.max(nextId, rect.id + 1); createPane(rect); });
+} else {
+  createPane({ x: 20, y: 20, w: 480, h: 300, z: 1 });
+  createPane({ x: 520, y: 20, w: 480, h: 300, z: 1 });
+  createPane({ x: 20, y: 340, w: 480, h: 300, z: 1 });
+  saveLayout();
+}
+
+window.__mdiPanes = panes;
+</script>
+</body>
+</html>

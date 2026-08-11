@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>approval-popup</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #a35a1a; color: #fff; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; }
+  #box { text-align: center; padding: 12px; }
+  #time { font-size: 11px; opacity: .8; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="box">
+  <div>⚠ 承認が必要です(PoC)</div>
+  <div id="time"></div>
+</div>
+<script>
+  document.getElementById('time').textContent = new Date().toLocaleTimeString('ja-JP');
+</script>
+</body>
+</html>

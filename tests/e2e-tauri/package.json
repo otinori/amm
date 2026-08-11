@@ -1,0 +1,9 @@
+{
+  "name": "amm-e2e-tauri",
+  "private": true,
+  "description": "CDP-based integration test helper for src/apps/Amm (migrate-to-tauri tasks.md 6.5). See README.md.",
+  "main": "connect.js",
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

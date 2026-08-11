@@ -1,0 +1,168 @@
+name: PR Prerelease
+
+# spec: mainへのPRが作成/更新されるたびにTauri版(Windows+macOS)インストーラ
+# をビルドし、vX.Y.Z-prN タグのプレリリースとして公開する(ユーザー要望
+# 2026-08-05:「メイン以外で作成されたものはプレリリースされないのか？
+# できればしてほしい」)。旧レガシー.NET版の同名ワークフロー(04bb27fで削除、
+# 「.NETをcicdする必要はない」)と同じ設計を踏襲しつつ、Tauri版のビルド
+# 手順(release.ymlのrelease-tauri-windows/macosと同一)に置き換えている。
+# バージョン番号はrelease.yml同様tauri.conf.json/Cargo.tomlの値を使う。
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to build a prerelease for'
+        required: true
+        type: string
+
+# 同じPRの古いビルドを自動キャンセルしてWindows/macOS runner分を節約する。
+# workflow_dispatchは手動なのでキャンセルしない対象にしたいところだが、
+# pr_number起点でグループ化しているため同じPR番号を指定した場合は同様に
+# キャンセルされる(意図した挙動 - 同一PRへの重複ビルドを避ける)。
+concurrency:
+  group: pr-prerelease-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  compute-version:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name == 'workflow_dispatch'
+    outputs:
+      prver: ${{ steps.ver.outputs.prver }}
+      tag: ${{ steps.ver.outputs.tag }}
+      pr_number: ${{ steps.pr.outputs.number }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve PR number
+        id: pr
+        shell: bash
+        # security: `pr_number`(workflow_dispatch手動入力)はgithub.event.
+        # pull_request.numberと異なり書き込み権限を持つ誰でも自由文字列を
+        # 渡せるため、env:経由で受け取り正の整数であることを検証してから
+        # 以降のコマンド(特にタグ名・GitHub Release作成)へ渡す。
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            n="$PR_EVENT_NUMBER"
+          else
+            n="$INPUT_PR_NUMBER"
+          fi
+          if ! [[ "$n" =~ ^[0-9]+$ ]]; then
+            echo "PR number '$n' is not a plain positive integer." >&2
+            exit 1
+          fi
+          echo "number=$n" >> "$GITHUB_OUTPUT"
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          conf_ver=$(python3 -c "import json; print(json.load(open('src/apps/Amm/src-tauri/tauri.conf.json'))['version'])")
+          cargo_ver=$(grep -m1 '^version = ' src/apps/Amm/src-tauri/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$conf_ver" != "$cargo_ver" ]; then
+            echo "tauri.conf.json version ($conf_ver) and Cargo.toml version ($cargo_ver) do not match - fix before this can release." >&2
+            exit 1
+          fi
+          prver="${conf_ver}-pr${PR_NUMBER}"
+          echo "prver=$prver" >> "$GITHUB_OUTPUT"
+          echo "tag=v$prver" >> "$GITHUB_OUTPUT"
+
+  prerelease-tauri-windows:
+    needs: compute-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/apps/Amm/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version ^2
+
+      - name: Build installers
+        run: tools\build-installer-tauri.cmd
+
+      - name: Create/update GitHub prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          # YAML gotcha: this must be quoted - an unquoted plain scalar
+          # treats ` #` (space then hash) as a comment start, which silently
+          # truncated this to "amm 1.2.0-pr99999 (PR" with everything from
+          # the "#" onward dropped (found 2026-08-05 verifying this
+          # workflow's first real run). The `tag_name`/`body` lines above
+          # don't need this: tag_name has no "#", and body uses a `|` block
+          # scalar where "#" is literal content, not a comment marker.
+          name: "amm ${{ needs.compute-version.outputs.prver }} (PR #${{ needs.compute-version.outputs.pr_number }})"
+          prerelease: true
+          draft: false
+          body: |
+            PR #${{ needs.compute-version.outputs.pr_number }} のテスト用プレリリースビルドです。
+            正式リリースではありません。
+
+            **コミット:** ${{ github.sha }}
+          files: |
+            artifacts/packages/tauri-windows/*.exe
+            artifacts/packages/tauri-windows/*.msi
+
+  prerelease-tauri-macos:
+    needs: compute-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/apps/Amm/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version ^2
+
+      - name: Build installers
+        run: bash tools/build-installer-tauri-macos.sh
+
+      - name: Zip .app
+        run: |
+          cd artifacts/packages/tauri-macos
+          ditto -c -k --sequesterRsrc --keepParent amm.app amm.app.zip
+
+      - name: Create/update GitHub prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          # YAML gotcha: this must be quoted - an unquoted plain scalar
+          # treats ` #` (space then hash) as a comment start, which silently
+          # truncated this to "amm 1.2.0-pr99999 (PR" with everything from
+          # the "#" onward dropped (found 2026-08-05 verifying this
+          # workflow's first real run). The `tag_name`/`body` lines above
+          # don't need this: tag_name has no "#", and body uses a `|` block
+          # scalar where "#" is literal content, not a comment marker.
+          name: "amm ${{ needs.compute-version.outputs.prver }} (PR #${{ needs.compute-version.outputs.pr_number }})"
+          prerelease: true
+          draft: false
+          body: |
+            PR #${{ needs.compute-version.outputs.pr_number }} のテスト用プレリリースビルドです。
+            正式リリースではありません。
+
+            **コミット:** ${{ github.sha }}
+          files: |
+            artifacts/packages/tauri-macos/amm.app.zip
+            artifacts/packages/tauri-macos/*.dmg

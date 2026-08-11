@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.4.6) — release is created as draft'
+        required: true
+        default: '0.1.4.6'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # spec: バージョン解決を1箇所に集約し、tauri-windows/tauri-macosの2ジョブが
+  # 同じtag_name(=同じGitHub Release)へ収束するようにする(以前は唯一の
+  # ジョブ単独でtag_nameを明示せずgithub.ref_name任せだったため、
+  # workflow_dispatch実行時にタグが存在せずどこへ着地するか不明瞭だった)。
+  # レガシー.NET版(WinForms)は保守終了・参照専用のためCI/CDから除外済み
+  # (ユーザー要望、2026-08-05: 「.NETをcicdする必要はない。もうこれは過去の
+  # 遺物」)。
+  #
+  # spec: mainへのpushでも起動し、tauri.conf.json/Cargo.tomlに焼き込み済みの
+  # バージョンから自動でdraftリリースを作成・更新する(ユーザー要望2026-08-05:
+  # 「mainマージされたものは正式リリースしてほしい」)。最終的な一般公開は
+  # GitHub UI上での手動publishボタンに委ねる(draft:trueのまま、下書きレビュー
+  # 経由を選択)。同一バージョンでの複数回のマージ(バージョン未更新のまま
+  # の通常マージ)で毎回無駄にWindows/macOSのフルビルドが走らないよう、
+  # 該当タグのリリースが既に存在する場合はビルドジョブ自体をスキップする
+  # (タグpush/workflow_dispatchでは同じ仕組みを適用しない - 実際にこのCI/CD
+  # 検証セッション中も同一バージョンでのworkflow_dispatch再実行を繰り返し
+  # 使っており、これを塞ぐと検証用の再実行ができなくなる)。
+  compute-version:
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.ver.outputs.semver }}
+      fourpart: ${{ steps.ver.outputs.fourpart }}
+      tag: ${{ steps.ver.outputs.tag }}
+      skip: ${{ steps.exists.outputs.skip || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version
+        id: ver
+        shell: bash
+        # security: pass untrusted/semi-trusted context values (workflow_dispatch
+        # inputs, ref_name) through env: rather than interpolating ${{ }} directly
+        # into the script body - see the historical pwsh version of this step
+        # (git blame) for the full script-injection rationale, same logic ported
+        # to bash since this job now runs on ubuntu-latest (no dotnet/MSBuild
+        # dependency, so no need for a Windows runner just to parse a version
+        # string).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            raw="$INPUT_VERSION"
+          elif [[ "$REF" == refs/tags/* ]]; then
+            raw="${REF_NAME#v}"
+          else
+            # push to main (or any other non-tag ref): read the version
+            # already baked into tauri.conf.json/Cargo.toml rather than
+            # deriving it from the ref, and make sure the two haven't
+            # drifted apart (CLAUDE.md's "バージョン管理" - both must be
+            # updated together, this just enforces it at release time too).
+            conf_ver=$(python3 -c "import json; print(json.load(open('src/apps/Amm/src-tauri/tauri.conf.json'))['version'])")
+            cargo_ver=$(grep -m1 '^version = ' src/apps/Amm/src-tauri/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+            if [ "$conf_ver" != "$cargo_ver" ]; then
+              echo "tauri.conf.json version ($conf_ver) and Cargo.toml version ($cargo_ver) do not match - fix before this can release." >&2
+              exit 1
+            fi
+            raw="$conf_ver"
+          fi
+          if ! [[ "$raw" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "Version '$raw' is not a plain numeric SemVer-ish string (expected e.g. 1.2.0 or 1.2.0.0)." >&2
+            exit 1
+          fi
+          IFS='.' read -ra parts <<< "$raw"
+          while [ "${#parts[@]}" -lt 4 ]; do parts+=("0"); done
+          fourpart="${parts[0]}.${parts[1]}.${parts[2]}.${parts[3]}"
+          echo "semver=$raw" >> "$GITHUB_OUTPUT"
+          echo "fourpart=$fourpart" >> "$GITHUB_OUTPUT"
+          echo "tag=v$raw" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release on branch push
+        id: exists
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "release $TAG already exists - skipping rebuild for this push"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # spec: Tauri版(Windows) - NSIS(*.exe)+MSI(*.msi)をビルドしtauri-macosと
+  # 同じGitHub Releaseへ添付する(ユーザー要望2026-08-05: 「cicdでwindows版、
+  # mac版のインストーラーができるところまで確認する」)。Tauri自身のバージョン
+  # はtauri.conf.json/Cargo.tomlに焼き込み済み(publish-tauri.cmdの1st argは
+  # 現状未使用、CLAUDE.mdの「バージョン管理」参照)なので、compute-versionの
+  # semverはリリースタグ・ファイル名にのみ使い、ビルド自体には渡さない。
+  release-tauri-windows:
+    needs: compute-version
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/apps/Amm/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version ^2
+
+      - name: Build installers
+        run: tools\build-installer-tauri.cmd
+
+      - name: Create/update GitHub Release (draft)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          name: amm v${{ needs.compute-version.outputs.semver }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/packages/tauri-windows/*.exe
+            artifacts/packages/tauri-windows/*.msi
+
+  # spec: Tauri版(macOS) - .app(zip化)+.dmg(生成できれば)。CIランナーは
+  # ヘッドレスのためbundle_dmg.shのFinder装飾AppleScriptステップがAutomation
+  # 権限無しで失敗する既知の制約がある(tools/build-installer-tauri-macos.sh
+  # のヘッダコメント参照)- そのステップ自体は非fatal扱いなので.appは必ず
+  # 生成されるが、.dmgは生成されない可能性がある。両方とも「存在すれば
+  # アップロード」というfiles:のglobパターンで許容する。.appはディレクトリ
+  # のためGitHub Releaseへ直接添付できず、zip化してから添付する。
+  release-tauri-macos:
+    needs: compute-version
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/apps/Amm/src-tauri
+
+      - name: Install cargo-tauri
+        run: cargo install tauri-cli --version ^2
+
+      - name: Build installers
+        run: bash tools/build-installer-tauri-macos.sh
+
+      - name: Zip .app
+        run: |
+          cd artifacts/packages/tauri-macos
+          ditto -c -k --sequesterRsrc --keepParent amm.app amm.app.zip
+
+      - name: Create/update GitHub Release (draft)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          name: amm v${{ needs.compute-version.outputs.semver }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/packages/tauri-macos/amm.app.zip
+            artifacts/packages/tauri-macos/*.dmg
