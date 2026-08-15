@@ -232,7 +232,7 @@ Notification hook の permission_prompt/elicitation_dialog、OSC9 由来の atte
 - 新規ペインは末尾に追加される
 - ペインのタイトルバーを別のペインへドラッグ&ドロップすると、2 つのペインの並び順スロットが入れ替わる（座標そのものを動かすのではない）
 - 「並び順をリセット」（[§3.3](#33-並び順をリセット)）で起動順（`displayId` 順）に戻せる。同時に各プロファイルの `autoStartCount` に足りない分のペインを補充する
-- 並び順はブラウザの localStorage（`amm-pane-layout-v1` キー）に自動保存され、次回起動時に同じ並び順・同じ生存ペイン構成で復元を試みる
+- 並び順自体は生存ペイン間の一時的な状態で、再起動をまたいでは永続化しない。amm 起動時に生成されるペインは各プロファイルの `autoStartCount` 設定のみに従い、`profiles.amm` に定義のないコマンドが自動起動することはない
 
 ### 7.1 終了時 git commit / push ガード
 
@@ -629,7 +629,6 @@ MCP クライアントから `tools/list` を呼ぶと、amm 組み込みツー�
 | `.amm` 信頼済みパス一覧 | `...\amm\trusted-profiles.json` | 同パターン |
 | アプリログ | `...\amm\log\app.log` | 同パターン |
 | セッションログ | `...\amm\sessions\YYYYMMDD-HHMMSS-<name>.log` (profile の `sessionLog: true` 時のみ、**平文保存**) | 同パターン |
-| ペインの並び順 | ブラウザ localStorage (`amm-pane-layout-v1`、[§7](#7-ペインの並び順)) | 同左 |
 
 `history.json` は旧 .NET WinForms 版とスキーマが互換（フィールド名の大文字/小文字差異は自動吸収されるため、旧版からの移行時も引き継がれる）。
 

@@ -11,7 +11,6 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { getCurrentWindow } = window.__TAURI__.window;
 
-const STORAGE_KEY = 'amm-pane-layout-v1';
 const desk = document.getElementById('desk');
 const promptInput = document.getElementById('prompt-input');
 const statusLine = document.getElementById('status-line');
@@ -130,7 +129,6 @@ async function resetPaneOrder() {
   panes.sort((a, b) => a.displayId - b.displayId);
   layoutTiles();
   updateQuickSwitchBar();
-  saveLayout();
   await topUpAutoStartPanes();
 }
 
@@ -462,14 +460,4 @@ function updateQuickSwitchBar() {
   });
 }
 
-function loadLayout() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; }
-  catch { return null; }
-}
-
-// Only the pane *order* is persisted now (no ratios/positions - the grid is
-// always recomputed from count, see layoutTiles/computeGridDims).
-function saveLayout() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ order: panes.map((p) => p.displayId) }));
-}
 
