@@ -31,7 +31,7 @@
     "targets": "all",
     "publisher": "amm contributors",
     "copyright": "Copyright (c) amm contributors",
-    "licenseFile": "../../../installer/wix/License.rtf",
+    "licenseFile": "wix/License.rtf",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
