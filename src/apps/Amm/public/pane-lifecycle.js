@@ -165,7 +165,6 @@ async function createPane(rect, opts) {
         swapPaneOrder(pane, dockTarget);
         layoutTiles();
         updateQuickSwitchBar();
-        saveLayout();
       }
     };
     document.addEventListener('mousemove', onMove);
@@ -410,6 +409,5 @@ async function closePane(pane, { force = false, shiftHeld = false } = {}) {
   updateQuickSwitchBar();
   updateStatusLine();
   updateTraySessions();
-  saveLayout();
 }
 

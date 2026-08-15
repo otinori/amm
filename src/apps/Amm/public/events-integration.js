@@ -888,20 +888,17 @@ function confirmUnsavedProfileChanges(path) {
   // 提供する(全呼び出し元が同期前提のため)。コマンドタイプ編集画面でOKした
   // 際もこのキャッシュをその場で更新し、再起動なしに反映する。
   cachedCommandTypePresets = await invoke('get_command_type_presets').catch(() => []);
-  const saved = loadLayout();
-  const savedOrder = saved?.order ?? [];
-  // Recreate exactly the saved panes (same displayIds, fresh ptys), in saved
-  // order - createPane() appends to `panes` as it goes, so `panes` ends up
-  // in savedOrder's order with no extra bookkeeping needed. No fallback
-  // blank pane when there's no saved order: a profile-less shell has no use
-  // case of its own (see: the removed "ペイン追加" button), so a fresh
-  // install with nothing configured to autostart correctly opens to zero
-  // panes rather than one nobody asked for.
-  for (const displayId of savedOrder) await createPane({ displayId });
+  // spec: pane-management「起動時のペイン自動起動」- 起動時に生成するペインは
+  // 各プロファイルの autoStartCount 設定のみに従う(profiles.amm を経由しない
+  // 起動は一切行わない)。旧実装はブラウザ localStorage に保存した前回終了時の
+  // 生存ペイン数を、プロファイルと無関係な素のシェル(cmd.exe/PowerShell)で
+  // 機械的に復元しており、profiles.amm を一度も開いていない/未設定の状態でも
+  // インストーラの再実行・再インストール時にlocalStorageだけが残っていると
+  // コマンドが自動起動して見える不具合報告があった(ユーザー報告)。復元される
+  // のは表示上の生存数だけでどのプロファイル/コマンドだったかは元々保存して
+  // おらず、常に無関係な空シェルにしかならない機能だったため、この経路自体を
+  // 廃止し autoStartCount 一本化した。
+  await topUpAutoStartPanes();
   if (panes.length > 0) setActivePane(panes[0]);
   layoutTiles();
-  // spec: pane-management「記憶した配置の復元」の autoStartCount 追加起動 -
-  // 保存済みレイアウトの有無にかかわらず、起動時に一度だけ不足分を補充する。
-  await topUpAutoStartPanes();
-  saveLayout();
 })();
