@@ -64,6 +64,13 @@ function positionPane(pane, x, y, w, h) {
   pane.el.style.width = w + 'px';
   pane.el.style.height = h + 'px';
   pane.fitAddon.fit();
+  // FitAddon.fit() clears the render service's cache before resizing
+  // whenever cols/rows actually change (xterm.js addon-fit internals) - an
+  // explicit refresh forces the renderer to immediately repaint the full
+  // buffer at the new size instead of relying on resize() to schedule it,
+  // as a defensive measure against a reported blank-pane-after-resize
+  // symptom (user report, unverified fix - see retro-pending).
+  pane.term.refresh(0, pane.term.rows - 1);
   invoke('pty_resize', { paneId: pane.paneId, cols: pane.term.cols, rows: pane.term.rows }).catch((err) => console.error('pty_resize failed:', err));
 }
 

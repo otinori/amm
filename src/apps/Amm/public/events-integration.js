@@ -401,6 +401,9 @@ async function runSystemMenuAction(action, pane) {
     if (!pane) return;
     pane.term.options.fontSize = FONT_SIZES[action];
     pane.fitAddon.fit();
+    // spec: same defensive repaint as positionPane (pane-layout.js) - see
+    // its comment for why.
+    pane.term.refresh(0, pane.term.rows - 1);
     invoke('pty_resize', { paneId: pane.paneId, cols: pane.term.cols, rows: pane.term.rows }).catch((err) => console.error('pty_resize failed:', err));
     return;
   }
