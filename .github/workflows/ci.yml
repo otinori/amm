@@ -10,6 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   rust-build-and-test:
     # src/apps/Amm is a Cargo project. windows-latest already ships MSVC/Visual
